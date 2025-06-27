@@ -23,6 +23,7 @@ def fetch_stock_data(ms_api: ms.MoringstarAPI, stock: str):
 if __name__ == "__main__":
     ms_api = ms.MoringstarAPI.get_instance()
     speeds = []
+    incomplete_stocks = []
 
     start_program_time = time.time()
     with ThreadPoolExecutor(max_workers=_NUM_THREADS) as executor:
@@ -30,9 +31,12 @@ if __name__ == "__main__":
         for future in as_completed(futures):
             stock, data, elapsed_time = future.result()
             speeds.append(elapsed_time)
+            if data is None:
+                incomplete_stocks.append(stock)
             print(f"({elapsed_time:.2f}s) {data}")
 
     total_program_time = time.time() - start_program_time
     print(f"Total stocks: {len(common.STOCKS)}")
+    print(f"{len(incomplete_stocks)} stocks failed: {incomplete_stocks}")
     print(f"Total synchronous time: {sum(speeds):.2f}s ({sum(speeds) / len(common.STOCKS):.2f}s/stock)")
     print(f"Total asynchronous time: {total_program_time:.2f}s ({total_program_time / len(common.STOCKS):.2f}s/stock)")
