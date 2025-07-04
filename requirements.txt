@@ -1,0 +1,5 @@
+# install this project in editable mode
+-e .
+
+# optionally, install the dev dependencies to run tests, etc.
+# -e .'[dev]'
