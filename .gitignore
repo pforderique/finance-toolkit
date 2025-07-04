@@ -4,6 +4,7 @@
 **/.vscode/
 *pytest*
 *.egg-info
+.coverage
 
 # QC specific files
 **/lean.json

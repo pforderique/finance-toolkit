@@ -94,6 +94,6 @@ class KHeap(Generic[T]):
 
     def __repr__(self) -> str:
         if self._min:
-            return f"KHeap(min, k={self._k}, size={len(self._heap)}, elements={self._heap})"
+            return f"KHeap(min, k={self._k}, heap={self._heap})"
         else:
-            return f"KHeap(max, k={self._k}, size={len(self._heap)}, elements={[-x for x in self._heap]})"
+            return f"KHeap(max, k={self._k}, heap={[-x for x in self._heap]})"

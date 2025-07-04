@@ -71,3 +71,14 @@ class TestKHeap:
         self.min_heap.push(5).push(2).push(4)
         self.min_heap.clear()
         assert self.min_heap.size() == 0
+
+    def test_truthiness(self):
+        assert not self.min_heap
+        self.min_heap.push(5)
+        assert self.min_heap
+
+    def test_heap_repr(self):
+        self.min_heap.push(1).push(2)
+        assert repr(self.min_heap) == "KHeap(min, k=3, heap=[1, 2])"
+        self.max_heap.push(1).push(2)
+        assert repr(self.max_heap) == "KHeap(max, k=3, heap=[2, 1])"

@@ -13,6 +13,8 @@ setup(
     extras_require={
         "dev": [
             "pytest>=8.4.1",
+            "pytest-cov>=6.2.1",
+            "coverage>=7.9.2",
         ],
     },
 )
