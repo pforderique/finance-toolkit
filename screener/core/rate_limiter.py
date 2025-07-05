@@ -14,12 +14,10 @@ class RateLimiter:
     wait before making the next API call, and records that call immediately.
 
     Example usage:
-    >>> rate_limiter = RateLimiter(max_calls=2, period=1.0)
+    >>> rate_limiter = RateLimiter(max_calls=1, period=1.0)
     >>> rate_limiter.wait()
     0.0
-    >>> rate_limiter.wait()
-    0.0
-    >>> wait_time = rate_limiter.wait() # This will return a positive wait time
+    >>> rate_limiter.wait() # Should return a positive time if called within 1s
     """
 
     def __init__(self, max_calls: int, period: float = 1.0):
