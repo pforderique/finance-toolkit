@@ -15,7 +15,5 @@ pytest --cov=screener --cov-report=term-missing
 ```
 or directly use `coverage` to generate an html report:
 ```
-coverage run -m pytest
-coverage report -m
-coverage html
+coverage run -m pytest && coverage html && open htmlcov/index.html
 ```
