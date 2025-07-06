@@ -6,8 +6,10 @@ setup(
     packages=find_packages(),
     install_requires=[
         "npyscreen>=4.10.5",
-        "requests>=2.32.3",
+        "pydantic>=2.11.7",
         "python-dotenv>=1.1.0",
+        "redis>=6.2.0",
+        "requests>=2.32.3",
         "setuptools>=68.0.0"
     ],
     extras_require={
