@@ -12,6 +12,7 @@ import heapq
 
 T = TypeVar('T', int, float)
 
+
 class KHeap(Generic[T]):
     """
     A min- or max-heap tracking at most k elements.
@@ -40,7 +41,7 @@ class KHeap(Generic[T]):
 
     def push(self, value: T) -> Self:
         """Push a value onto the heap, maintaining size k.
-        
+
         If the heap exceeds size k, the top element is removed before adding the
         new value.
         """
@@ -57,16 +58,17 @@ class KHeap(Generic[T]):
 
     def pop(self) -> T:
         """Pop the top element from the heap.
-        
-        Raises IndexError if the heap is empty.
+
+        Raises:
+            IndexError if the heap is empty.
         """
         if not self._heap:
             raise IndexError("Heap is empty")
 
         if self._min:
             return heapq.heappop(self._heap)
-        else:
-            return -heapq.heappop(self._heap)
+
+        return -heapq.heappop(self._heap)
 
     def top(self) -> T:
         """Return the top element of the heap without removing it."""
@@ -75,8 +77,8 @@ class KHeap(Generic[T]):
 
         if self._min:
             return self._heap[0]
-        else:
-            return -self._heap[0]
+
+        return -self._heap[0]
 
     def clear(self) -> None:
         """Clear the heap."""
@@ -95,5 +97,5 @@ class KHeap(Generic[T]):
     def __repr__(self) -> str:
         if self._min:
             return f"KHeap(min, k={self._k}, heap={self._heap})"
-        else:
-            return f"KHeap(max, k={self._k}, heap={[-x for x in self._heap]})"
+
+        return f"KHeap(max, k={self._k}, heap={[-x for x in self._heap]})"
