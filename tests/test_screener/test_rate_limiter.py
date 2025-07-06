@@ -29,7 +29,7 @@ class TestRateLimiter:
     def test_concurrent_calls(self):
         rate_limiter = RateLimiter(max_calls=1, period=1.0)
 
-        worker = lambda: rate_limiter.wait(blocking=False)
+        def worker(): return rate_limiter.wait(blocking=False)
         threads = [threading.Thread(target=worker) for _ in range(5)]
 
         for thread in threads:
