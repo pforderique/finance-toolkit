@@ -35,6 +35,7 @@ class Cache(abc.ABC, Generic[K, V]):
     def close(self) -> Self:
         """Close the cache connection cleanly."""
 
+
 class RedisUrl(pydantic.BaseModel):
     """
     Model for validating Redis connection URLs.
@@ -124,4 +125,27 @@ class RedisCache(Cache[str, Any]):
     def close(self) -> Self:
         """Close the Redis connection cleanly."""
         self._client.close()
+        return self
+
+
+class FakeCache(Cache[K, V], Generic[K, V]):
+    """In-memory fake cache for testing purposes.
+
+    Implements same interface as Cache.
+    """
+
+    def __init__(self):
+        self._store: dict[K, V] = {}
+
+    def get(self, key: K) -> V | None:
+        return self._store.get(key)
+
+    def set(self, key: K, val: V) -> Self:
+        self._store[key] = val
+        return self
+
+    def has(self, key: K) -> bool:
+        return key in self._store
+
+    def close(self) -> Self:
         return self

@@ -10,8 +10,12 @@ from screener.core import cache
 RedisCache = cache.RedisCache
 RedisUrl = cache.RedisUrl
 
+_KEY = "test_key"
+_VALUE = "test_value"
+
 
 class FakeRedis:
+
     def __init__(self):
         self.store = {}
         self.closed = False
@@ -31,6 +35,7 @@ class FakeRedis:
 
 
 class TestRedisUrl:
+
     def test_valid_model(self):
         r = RedisUrl(base_url="example.com", port=6380, db=2)
         assert r.get_full_url() == "redis://example.com:6380/2"
@@ -62,47 +67,40 @@ class TestRedisCache:
 
     def test_set_and_get(self, patch_redis):
         cache_instance = RedisCache(RedisUrl(base_url="unused"))
-        key = "test_key"
-        value = "test_value"
 
-        cache_instance.set(key, value)
+        cache_instance.set(_KEY, _VALUE)
 
-        assert cache_instance.get(key) == value
+        assert cache_instance.get(_KEY) == _VALUE
 
     def test_get_with_different_namespaces(self, patch_redis):
         url = RedisUrl(base_url="unused")
         cache1 = RedisCache(url, namespace="ns1")
         cache2 = RedisCache(url, namespace="ns2")
-        common_key = "key"
         cache1_value = "val"
         cache2_value = "a_different_val"
-        cache1.set(common_key, cache1_value)
-        cache2.set(common_key, cache2_value)
+        cache1.set(_KEY, cache1_value)
+        cache2.set(_KEY, cache2_value)
 
-        assert cache1.get(common_key) == cache1_value
-        assert cache2.get(common_key) == cache2_value
+        assert cache1.get(_KEY) == cache1_value
+        assert cache2.get(_KEY) == cache2_value
 
     def test_has_key(self, patch_redis):
         cache_instance = RedisCache(RedisUrl(base_url="unused"))
-        key = "test_key"
-        value = "test_value"
 
-        assert not cache_instance.has(key)
-        cache_instance.set(key, value)
-        assert cache_instance.has(key)
+        assert not cache_instance.has(_KEY)
+        cache_instance.set(_KEY, _VALUE)
+        assert cache_instance.has(_KEY)
 
     def test_get_non_existent_key(self, patch_redis):
         cache_instance = RedisCache(RedisUrl(base_url="unused"))
-        key = "non_existent_key"
-        assert cache_instance.get(key) is None
+        assert cache_instance.get(_KEY) is None
 
     def test_set_and_get_pickleable_object(self, patch_redis):
         cache_instance = RedisCache(RedisUrl(base_url="unused"))
-        key = "test_object"
         value = {"key": "value", "number": 42}
 
-        cache_instance.set(key, value)
-        retrieved_value = cache_instance.get(key)
+        cache_instance.set(_KEY, value)
+        retrieved_value = cache_instance.get(_KEY)
 
         assert retrieved_value == value
         assert isinstance(retrieved_value, dict)
@@ -114,19 +112,23 @@ class TestRedisCache:
         cache_instance.close()
         assert patch_redis.closed
 
-class TestFakeRedis:
-    def test_fake_redis_get_set(self):
-        fake_redis = FakeRedis()
-        fake_redis.set("key", "value")
-        assert fake_redis.get("key") == "value"
 
-    def test_fake_redis_exists(self):
-        fake_redis = FakeRedis()
-        fake_redis.set("key", "value")
-        assert fake_redis.exists("key") == 1
-        assert fake_redis.exists("non_existent_key") == 0
+class TestFakeCache:
 
-    def test_fake_redis_close(self):
-        fake_redis = FakeRedis()
-        fake_redis.close()
-        assert fake_redis.closed
+    def test_set_and_get(self):
+        cache_instance = cache.FakeCache[str, str]()
+
+        cache_instance.set(_KEY, _VALUE)
+
+        assert cache_instance.get(_KEY) == _VALUE
+
+    def test_has_key(self):
+        cache_instance = cache.FakeCache[str, str]()
+
+        assert not cache_instance.has(_KEY)
+        cache_instance.set(_KEY, _VALUE)
+        assert cache_instance.has(_KEY)
+    
+    def test_get_non_existent_key(self):
+        cache_instance = cache.FakeCache[str, str]()
+        assert cache_instance.get(_KEY) is None
