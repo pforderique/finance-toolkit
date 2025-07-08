@@ -2,7 +2,10 @@ import threading
 import time
 import pytest
 
-from screener.core.rate_limiter import RateLimiter
+from screener.core import rate_limiter
+
+
+RateLimiter = rate_limiter.RateLimiter
 
 
 class TestRateLimiter:

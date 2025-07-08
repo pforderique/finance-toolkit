@@ -4,7 +4,10 @@ import threading
 import time
 import datetime
 
-from screener.core.heap import KHeap
+from screener.core import heap
+
+
+KHeap = heap.KHeap[float]
 
 
 class RateLimiter:
@@ -26,7 +29,7 @@ class RateLimiter:
 
         self.max_calls = max_calls
         self.period = period
-        self._heap = KHeap[float](k=max_calls, is_min_heap=True)
+        self._heap = KHeap(k=max_calls, is_min_heap=True)
         self._lock = threading.Lock()
 
     def wait(self, blocking=False) -> float:
