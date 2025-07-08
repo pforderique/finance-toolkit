@@ -1,14 +1,39 @@
-"""
-Cache abstraction backed by Redis for storing arbitrary Python objects under
-string keys. Supports multiple namespaces.
+"""Cache abstraction layer for Python applications.
+
+This module provides an abstract base class for cache implementations including
+a Redis-backed cache with namespace support and a FakeCache for testing.
 """
 
+import abc
 import pickle
-from typing import Any, Self
+from typing import Any, Generic, Self, TypeVar
 
 import pydantic
 import redis
 
+
+K = TypeVar('K')
+V = TypeVar('V')
+
+
+class Cache(abc.ABC, Generic[K, V]):
+    """Abstract base class for cache implementations."""
+
+    @abc.abstractmethod
+    def get(self, key: K) -> V | None:
+        """Retrieve a value by key, or None if not present."""
+
+    @abc.abstractmethod
+    def set(self, key: K, val: V) -> Self:
+        """Store a value under the given key."""
+
+    @abc.abstractmethod
+    def has(self, key: K) -> bool:
+        """Return True if the key exists in cache."""
+
+    @abc.abstractmethod
+    def close(self) -> Self:
+        """Close the cache connection cleanly."""
 
 class RedisUrl(pydantic.BaseModel):
     """
@@ -56,7 +81,7 @@ class RedisUrl(pydantic.BaseModel):
         return self.get_full_url()
 
 
-class Cache:
+class RedisCache(Cache[str, Any]):
     """
     Simple Redis-backed cache. Stores pickled Python objects under string keys.
 
@@ -67,10 +92,7 @@ class Cache:
 
     def __init__(self, url: RedisUrl, namespace: str = ""):
         self._namespace = namespace.strip(':')
-        self._client = redis.Redis.from_url(
-            url.get_full_url(),
-            decode_responses=True
-        )
+        self._client = redis.Redis.from_url(url.get_full_url())
 
     def _prefixed(self, key: str) -> str:
         return f"{self._namespace}:{key}" if self._namespace else key
