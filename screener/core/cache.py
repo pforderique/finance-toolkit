@@ -10,6 +10,7 @@ from typing import Any, Generic, Self, TypeVar
 
 import pydantic
 import redis
+import urllib.parse
 
 
 K = TypeVar('K')
@@ -48,6 +49,28 @@ class RedisUrl(pydantic.BaseModel):
     base_url: str
     port: int = 6379
     db: int = 0
+
+    @classmethod
+    def parse_url(cls, url: str) -> Self:
+        """Parse a Redis URL string into a RedisUrl instance.
+
+        Args:
+            url: Redis connection URL in the format redis://{base_url}:{port}/{db}
+
+        Returns:
+            RedisUrl: Parsed RedisUrl instance.
+
+        Raises:
+            ValueError: If the URL scheme is not 'redis' or if the URL is invalid
+        """
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != 'redis':
+            raise ValueError("Invalid Redis URL scheme, must be 'redis'")
+        return cls(
+            base_url=parsed.hostname or "localhost",
+            port=parsed.port or 6379,
+            db=int(parsed.path[1:]) if parsed.path else 0
+        )
 
     def get_full_url(self) -> str:
         """Construct the full Redis URL from components.

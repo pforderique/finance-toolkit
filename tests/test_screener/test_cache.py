@@ -52,6 +52,21 @@ class TestRedisUrl:
         with pytest.raises(pydantic.ValidationError):
             RedisUrl(base_url=base_url, port=port, db=db)
 
+    def test_parse_url_success(self):
+        url = "redis://example.com:6380/2"
+
+        r = RedisUrl.parse_url(url)
+
+        assert r.base_url == "example.com"
+        assert r.port == 6380
+        assert r.db == 2
+
+    def test_parse_url_invalid_scheme(self):
+        url = "http://example.com:6380/2"
+
+        with pytest.raises(ValueError):
+            RedisUrl.parse_url(url)
+
 
 class TestRedisCache:
 
