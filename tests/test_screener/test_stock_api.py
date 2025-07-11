@@ -40,37 +40,37 @@ def patch_config(monkeypatch):
     monkeypatch.setattr(config, "MORNINGSTAR_API_TIMEOUT", 0.1)
     monkeypatch.setattr(config, "MORNINGSTAR_API_MAX_RETRIES", 2)
     monkeypatch.setattr(config, "REDIS_URL", "redis://localhost:6379/0")
-
-# Helper to build fake APIClient.get responses
 def fake_client_get_factory(responses: list[Any]):
     """
-    Return a stub function for APIClient.get that pops
-    the next response based on the route key.
+    Given a list of 4 responses [auto_complete, fmv, price, rating],
+    returns a stub that returns the correct one by `route`.
     """
-    queue = deque(responses)
-
+    ROUTES = [
+        "market/v3/auto-complete",
+        "stock/v2/get-price-fair-value",
+        "stock/v2/get-mini-chart-realtime-data",
+        "stock/v2/get-security-info",
+    ]
+    mapping = dict(zip(ROUTES, responses))
 
     def stub(route: str, params=None, check_cache=True, retry=None):
-        if not queue:
-            pytest.fail(f"No more stubbed responses for route {route!r}")
-        return queue.popleft()
+        if route not in mapping:
+            pytest.fail(f"No stubbed response for route {route!r}")
+        return mapping[route]
 
-    # allow test to enqueue
-    stub.queue = queue
     return stub
-
 
 class TestStockAPI:
     def test_get_info_happy_path(self):
         api = StockAPI(redis_url=None)
         stub = fake_client_get_factory([
-            # 1) auto-complete
+            # auto-complete
             [{
                 "performanceId": "P1",
                 "Name": "Test Corp",
                 "RegionAndTicker": "US:TEST"
             }],
-            # 2) fair value raw
+            # fmv
             {
                 "chart": {"chartDatums": {"recent": {
                     "latestFairValue": "100",
@@ -78,13 +78,13 @@ class TestStockAPI:
                     "fairValueDate": "2025-07-11"
                 }}}
             },
-            # 3) latest price raw
+            # price
             {
                 "lastPrice": "90",
                 "dayChange": "-2",
                 "dayChangePer": "-2%"
             },
-            # 4) star rating raw
+            # rating
             {"starRating": "4"}
         ])
         api._client.get = stub
@@ -105,8 +105,8 @@ class TestStockAPI:
         assert pytest.approx(result["discount"], rel=1e-6) == 0.9
         datetime.datetime.fromisoformat(result["lastCachedDate"])
 
-        # Ensure 2nd call returns cached without further client.get calls
-        stub.queue.clear()
+        # Second call should hit the cache (no errors)
+        # and return the *same* object
         result2 = api.get_info("TEST")
         assert result2 is result
 
@@ -115,59 +115,59 @@ class TestStockAPI:
     ])
     def test_get_info_missing_data_returns_none(self, missing_step):
         api = StockAPI(redis_url=None)
-        stub = fake_client_get_factory([])
 
-        # Stub sequentially: insert None or incomplete at the missing step
-        # 1) ticker info
+        # Build a list of four placeholders, then overwrite only the missing step
+        placeholders: list[Any] = [None, None, None, None]
+
+        # 1) ticker
         if missing_step == "ticker":
-            stub.queue.append([])
+            placeholders[0] = []
         else:
-            stub.queue.append([{
+            placeholders[0] = [{
                 "performanceId": "P2",
                 "Name": "Name2",
                 "RegionAndTicker": "US:XYZ"
-            }])
+            }]
 
         # 2) fmv
         if missing_step == "fmv":
-            stub.queue.append({})
+            placeholders[1] = {}
         else:
-            stub.queue.append({"chart": {"chartDatums": {"recent": {
+            placeholders[1] = {"chart": {"chartDatums": {"recent": {
                 "latestFairValue": "50",
                 "uncertainty": "2",
                 "fairValueDate": "2025-07-11"
-            }}}})
+            }}}}
 
         # 3) price
         if missing_step == "price":
-            stub.queue.append({})
+            placeholders[2] = {}
         else:
-            stub.queue.append({
+            placeholders[2] = {
                 "lastPrice": "48",
                 "dayChange": "0",
                 "dayChangePer": "0%"
-            })
+            }
 
         # 4) rating
         if missing_step == "rating":
-            stub.queue.append({})
+            placeholders[3] = {}
         else:
-            stub.queue.append({"starRating": "3"})
+            placeholders[3] = {"starRating": "3"}
 
-        api._client.get = stub
-
+        api._client.get = fake_client_get_factory(placeholders)
         assert api.get_info("XYZ") is None
 
     def test_get_info_with_non_numeric_discount(self):
         api = StockAPI(redis_url=None)
         stub = fake_client_get_factory([
-            # 1) auto-complete
+            # auto-complete
             [{
                 "performanceId": "P1",
                 "Name": "Test Corp",
                 "RegionAndTicker": "US:TEST"
             }],
-            # 2) fair value raw
+            # fmv (non-numeric)
             {
                 "chart": {"chartDatums": {"recent": {
                     "latestFairValue": "N/A",
@@ -175,19 +175,18 @@ class TestStockAPI:
                     "fairValueDate": "2025-07-11"
                 }}}
             },
-            # 3) latest price raw
+            # price (non-numeric)
             {
                 "lastPrice": "N/A",
                 "dayChange": "-2",
                 "dayChangePer": "-2%"
             },
-            # 4) star rating raw
+            # rating
             {"starRating": "3"}
         ])
         api._client.get = stub
 
         result = api.get_info("TEST")
-
         assert result is not None
         assert result["discount"] is None
 

@@ -1,6 +1,7 @@
 """StockAPI singleton for querying stock data using Morningstar."""
 
 from collections.abc import Container, Iterable
+from concurrent.futures import ThreadPoolExecutor
 import datetime
 import threading
 import itertools
@@ -117,23 +118,29 @@ class StockAPI:
 
         performance_id = ticker_info["performanceId"]
 
-        # Fetch Fair Market Value (FMV) using performance ID
-        if (fmv_info := self._fetch_fmv_info(
-            performance_id, check_cache=check_cache
-        )) is None:
-            return None
+        ms_results: dict[str, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                "fmv": executor.submit(
+                    self._fetch_fmv_info, performance_id, check_cache
+                ),
+                "price": executor.submit(
+                    self._fetch_latest_price_info, performance_id, check_cache
+                ),
+                "star_rating": executor.submit(
+                    self._fetch_star_rating_info, performance_id, check_cache
+                ),
+            }
 
-        # Fetch latest price data using performance ID
-        if (price_info := self._fetch_latest_price_info(
-            performance_id, check_cache=check_cache
-        )) is None:
-            return None
+            for name, future in futures.items():
+                if (result := future.result()) is None:
+                    return None
 
-        # Fetch star rating data using performance ID
-        if (star_rating_info := self._fetch_star_rating_info(
-            performance_id, check_cache=check_cache
-        )) is None:
-            return None
+                ms_results[name] = result
+
+        fmv_info = ms_results["fmv"]
+        price_info = ms_results["price"]
+        star_rating_info = ms_results["star_rating"]
 
         # Calculate additional fields
         try:
