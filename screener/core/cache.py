@@ -91,12 +91,22 @@ class RedisCache(Cache[str, Any]):
         namespace: Optional key prefix to isolate this cache (e.g. "api_cache").
     """
 
-    def __init__(self, url: RedisUrl, namespace: str = ""):
+    def __init__(self, client: redis.Redis, namespace: str = ""):
+        self._client = client
         self._namespace = namespace.strip(':')
-        self._client = redis.Redis.from_url(url.get_full_url())
 
     def _prefixed(self, key: str) -> str:
         return f"{self._namespace}:{key}" if self._namespace else key
+
+    @classmethod
+    def from_url(cls, url: RedisUrl, namespace: str = "") -> Self:
+        """Create a RedisCache instance from a RedisUrl."""
+        return cls(redis.Redis.from_url(url.get_full_url()), namespace)
+
+    @classmethod
+    def from_client(cls, client: redis.Redis, namespace: str = "") -> Self:
+        """Create a RedisCache instance from an existing Redis client."""
+        return cls(client, namespace)
 
     def get(self, key: str) -> Any | None:
         """Retrieve a value by key, or None if not present."""
