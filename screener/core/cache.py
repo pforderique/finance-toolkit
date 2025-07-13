@@ -5,12 +5,12 @@ a Redis-backed cache with namespace support and a FakeCache for testing.
 """
 
 import abc
-import pickle
+import json
 from typing import Any, Generic, Self, TypeVar
+import urllib.parse
 
 import pydantic
 import redis
-import urllib.parse
 
 
 K = TypeVar('K')
@@ -107,7 +107,7 @@ class RedisUrl(pydantic.BaseModel):
 
 class RedisCache(Cache[str, Any]):
     """
-    Simple Redis-backed cache. Stores pickled Python objects under string keys.
+    Simple Redis-backed cache. Stores JSON-serialized Python objects under string keys.
 
     Args:
         url: Redis connection URL (e.g., redis://localhost:6379/0)
@@ -138,16 +138,16 @@ class RedisCache(Cache[str, Any]):
         if raw is None:
             return None
 
-        return pickle.loads(raw)
+        return json.loads(raw)
 
     def set(self, key: str, val: Any) -> Self:
-        """Serialize and store a Python object under the given key.
+        """Serialize and store a JSON-serializable Python object under the given key.
 
         Args:
             key: The string key to store the value under.
-            val: The Python object to store (must be pickleable).
+            val: The Python object to store (must be JSON-serializable).
         """
-        raw = pickle.dumps(val)
+        raw = json.dumps(val)
         self._client.set(self._prefixed(key), raw)
         return self
 
