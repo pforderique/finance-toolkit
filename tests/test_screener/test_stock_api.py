@@ -66,7 +66,7 @@ class TestStockAPI:
         stub = fake_client_get_factory([
             # auto-complete
             [{
-                "performanceId": "P1",
+                "PerformanceId": "P1",
                 "Name": "Test Corp",
                 "RegionAndTicker": "US:TEST"
             }],
@@ -124,7 +124,7 @@ class TestStockAPI:
             placeholders[0] = []
         else:
             placeholders[0] = [{
-                "performanceId": "P2",
+                "PerformanceId": "P2",
                 "Name": "Name2",
                 "RegionAndTicker": "US:XYZ"
             }]
@@ -163,7 +163,7 @@ class TestStockAPI:
         stub = fake_client_get_factory([
             # auto-complete
             [{
-                "performanceId": "P1",
+                "PerformanceId": "P1",
                 "Name": "Test Corp",
                 "RegionAndTicker": "US:TEST"
             }],

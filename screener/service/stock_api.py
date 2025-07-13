@@ -8,7 +8,6 @@ import itertools
 import logging
 from typing import Any
 
-import pydantic
 import redis
 
 from screener import config
@@ -72,18 +71,19 @@ class StockAPI:
 
         redis_url = RedisUrl.parse_url(config.REDIS_URL)
         self._redis_client = redis.Redis.from_url(redis_url.get_full_url())
-        self._ms_cache = RedisCache.from_client(self._redis_client, namespace="msapi")
+        self._ms_cache = RedisCache.from_client(
+            self._redis_client, namespace="msapi")
         self._stock_cache = RedisCache.from_client(
             self._redis_client, namespace="stockapi")
 
         self._client = APIClient(
-            base_url=pydantic.HttpUrl(config.MORNINGSTAR_API_BASE_URL),
+            base_url=config.MORNINGSTAR_API_BASE_URL,
             api_cache=self._ms_cache,
             api_rate_limiter=self._rate_limiter,
             timeout=config.MORNINGSTAR_API_TIMEOUT,
         )
         self._client.session.headers.update({
-            "x-rapidapi-host": config.MORNINGSTAR_API_BASE_URL,
+            "x-rapidapi-host": config.MORNINGSTAR_API_BASE_URL.split("//")[-1],
         })
         self._use_api_key(next(self._key_cycle))
 
@@ -116,7 +116,7 @@ class StockAPI:
         if (ticker_info := self._fetch_ticker_info(symbol)) is None:
             return None
 
-        performance_id = ticker_info["performanceId"]
+        performance_id = ticker_info["PerformanceId"]
 
         ms_results: dict[str, dict[str, Any]] = {}
         with ThreadPoolExecutor(max_workers=3) as executor:
@@ -188,7 +188,7 @@ class StockAPI:
             Parsed JSON response with ticker info or None if not found.
 
         Returned dict contains:
-            - performanceId: Unique identifier for the stock.
+            - PerformanceId: Unique identifier for the stock.
             - Name: Full name of the stock.
             - RegionAndTicker: Region and ticker in the format "Region:Ticker".
         """
@@ -208,12 +208,14 @@ class StockAPI:
         ticker_info = ticker_infos[0]
         if not _has_keys(
             ticker_info,
-            ("performanceId", "Name", "RegionAndTicker")
+            ("PerformanceId", "Name", "RegionAndTicker")
         ):
             logger.error(_UNEXPECTED_RESPONSE_MSG,
                          symbol, auto_complete_route, ticker_info)
             return None
 
+        logger.debug("[%s] fetched ticker info from %s: %s",
+                     symbol, auto_complete_route, ticker_info)
         return ticker_info
 
     def _fetch_fmv_info(
@@ -269,6 +271,9 @@ class StockAPI:
             )
             return None
 
+        logger.debug(
+            "[%s] fetched FMV info from %s: %s", performance_id, fmv_route, fmv_info
+        )
         return fmv_info
 
     def _fetch_latest_price_info(
@@ -308,6 +313,10 @@ class StockAPI:
                          performance_id, price_route, price_data)
             return None
 
+        logger.debug(
+            "[%s] fetched price data from %s: %s",
+            performance_id, price_route, price_data
+        )
         return price_data
 
     def _fetch_star_rating_info(
@@ -345,6 +354,10 @@ class StockAPI:
                          performance_id, ratings_route, ratings_data)
             return None
 
+        logger.debug(
+            "[%s] fetched star rating from %s: %s",
+            performance_id, ratings_route, ratings_data
+        )
         return ratings_data
 
     def __del__(self):
