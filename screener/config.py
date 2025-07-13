@@ -19,7 +19,7 @@ MORNINGSTAR_API_KEYS: list[str] = [
     key.strip() for key in os.getenv("MORNINGSTAR_API_KEYS", "").split(",")
 ]
 
-MORNINGSTAR_API_TIMEOUT: float = 5.0  # seconds
+MORNINGSTAR_API_TIMEOUT: float = 10.0  # seconds
 MORNINGSTAR_API_MAX_RETRIES: int = 3
 
 # ─── Rate Limiter Settings ────────────────────────────────────────────────────
@@ -36,7 +36,9 @@ REDIS_URL: str = "redis://localhost:6379/0"
 
 # ─── Alerting ─────────────────────────────────────────────────────────────────
 
-ALERT_EMAIL: str = os.getenv("ALERT_EMAIL", "")
+ALERT_EMAILS: list[str] = [
+    email.strip() for email in os.getenv("ALERT_EMAILS", "").split(",")
+]
 
 # ─── Logging & Misc ───────────────────────────────────────────────────────────
 
@@ -56,6 +58,13 @@ def validate_config():
         raise ValueError("RATE_LIMIT_PER_DAY must be greater than 0.")
     if not REDIS_URL:
         raise ValueError("REDIS_URL is not set.")
+
+    print("Configuration validation passed.")
+    print(f"MORNINGSTAR_API_BASE_URL: {MORNINGSTAR_API_BASE_URL}")
+    print(f"MORNINGSTAR_API_KEYS: {','.join(MORNINGSTAR_API_KEYS)}")
+    print(f"RATE_LIMIT_PER_SECOND: {RATE_LIMIT_PER_SECOND}")
+    print(f"RATE_LIMIT_PER_DAY: {RATE_LIMIT_PER_DAY}")
+    print(f"REDIS_URL: {REDIS_URL}")
 
 if __name__ == "__main__":
     try:
