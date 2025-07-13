@@ -4,7 +4,6 @@ from collections import deque
 
 import pytest
 import requests
-import pydantic
 from unittest.mock import MagicMock
 
 from screener.core.api_client import APIClient
@@ -12,7 +11,7 @@ from screener.core.cache import FakeCache
 from screener.core.rate_limiter import RateLimiter
 
 
-_BASE_URL = pydantic.HttpUrl("https://api.example.com")
+_BASE_URL = "https://api.example.com"
 _ROUTE = "test/route"
 _JSON_DATA = {"key": "value"}
 

@@ -7,9 +7,9 @@ import time
 from typing import Any
 import urllib.parse
 
-import pydantic
 import requests
 import requests.exceptions
+import validators
 
 from screener.core import cache
 from screener.core import rate_limiter
@@ -32,7 +32,7 @@ class APIClient:
 
     def __init__(
         self,
-        base_url: pydantic.HttpUrl,
+        base_url: str,
         api_cache: cache.Cache | None = None,
         api_rate_limiter: rate_limiter.RateLimiter | None = None,
         timeout: float = 5.0,
@@ -46,6 +46,9 @@ class APIClient:
             rate_limiter: RateLimiter instance used to control request rate.
             timeout: Default timeout for HTTP requests in seconds.
         """
+        if not validators.url(base_url):
+            raise ValueError(f"Invalid base URL: {base_url}")
+
         self.base_url = base_url
         self.cache = api_cache
         self.rate_limiter = api_rate_limiter
@@ -119,7 +122,7 @@ class APIClient:
         max_retry_wait_time = 10.0
 
         for attempt in range(1, retry + 1):
-            if retry_wait > 0:
+            if attempt > 1 and retry_wait > 0:
                 _logger.warning(
                     "[%s] retry %d/%d - waiting %.2fs",
                     route_key,
@@ -128,10 +131,12 @@ class APIClient:
                     retry_wait
                 )
                 time.sleep(retry_wait)
+            elif attempt == 1:
+                _logger.debug("[%s] fetching...", route_key)
 
             if self.rate_limiter is not None:
                 if (wait := self.rate_limiter.wait()) > 0:
-                    _logger.debug(
+                    _logger.info(
                         "[%s] waiting %.2fs to avoid hitting rate limit",
                         route_key,
                         wait,
@@ -141,11 +146,12 @@ class APIClient:
             response = func()
 
             _logger.debug(
-                "[%s] HTTP %d %s - headers %s",
+                "[%s] HTTP %d %s - text %s",
                 route_key,
                 response.status_code,
                 response.reason,
-                response.headers
+                f"{response.text[:100]}..."
+                    if len(response.text) > 100 else response.text
             )
 
             if response.status_code == http.HTTPStatus.OK:
@@ -169,7 +175,7 @@ class APIClient:
 
         err = requests.exceptions.RetryError(
             f"[{route_key}] HTTP {response.status_code} after {attempt}"
-            f" {'tries' if attempt > 1 else 'try'}." 
+            f" {'tries' if attempt > 1 else 'try'}."
         )
         _logger.exception("[%s] FAILED to call.", route_key, exc_info=err)
         raise err
