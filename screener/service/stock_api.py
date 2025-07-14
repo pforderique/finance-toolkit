@@ -127,7 +127,7 @@ class StockAPI:
             Parsed JSON response with stock info or None if not found.
         """
         if check_cache and (data := self.stock_cache.get(symbol)) is not None:
-            return data
+            return StockInfo.model_validate(data)
 
         # Fetch ticker info to get performance ID
         if (ticker_info := self._fetch_ticker_info(symbol)) is None:

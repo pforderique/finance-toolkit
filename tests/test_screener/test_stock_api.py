@@ -105,6 +105,12 @@ class TestStockAPI:
         assert pytest.approx(result.discount, rel=1e-6) == 0.9
         datetime.datetime.fromisoformat(str(result.lastCachedDate))
 
+        assert api.stock_cache.has("TEST")
+
+        result2 = api.get_info("TEST", check_cache=True)
+        assert result2 is not None
+        assert result2.model_dump() == result.model_dump()
+
     @pytest.mark.parametrize("missing_step", [
         "ticker", "fmv", "price", "rating"
     ])
