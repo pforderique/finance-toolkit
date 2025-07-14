@@ -46,7 +46,7 @@ class StockInfo(pydantic.BaseModel):
     uncertainty: str | None = None
     starRating: int | None = None
     fairValueDate: str | None = None
-    lastCachedDate: str | None = None
+    lastCachedDate: str
 
 
 class StockAPI:
