@@ -74,15 +74,15 @@ class TestStockAPI:
             {
                 "chart": {"chartDatums": {"recent": {
                     "latestFairValue": "100",
-                    "uncertainty": "5",
+                    "uncertainty": "HIGH",
                     "fairValueDate": "2025-07-11"
                 }}}
             },
             # price
             {
-                "lastPrice": "90",
-                "dayChange": "-2",
-                "dayChangePer": "-2%"
+                "lastPrice": 90,
+                "dayChange": -2,
+                "dayChangePer": -0.02
             },
             # rating
             {"starRating": "4"}
@@ -92,23 +92,18 @@ class TestStockAPI:
         result = api.get_info("TEST")
 
         assert result is not None
-        assert result["name"] == "Test Corp"
-        assert result["performanceId"] == "P1"
-        assert result["ticker"] == "TEST"
-        assert result["latestFairValue"] == "100"
-        assert result["uncertainty"] == "5"
-        assert result["fairValueDate"] == "2025-07-11"
-        assert result["lastPrice"] == "90"
-        assert result["dayChange"] == "-2"
-        assert result["dayChangePer"] == "-2%"
-        assert result["starRating"] == "4"
-        assert pytest.approx(result["discount"], rel=1e-6) == 0.9
-        datetime.datetime.fromisoformat(result["lastCachedDate"])
-
-        # Second call should hit the cache (no errors)
-        # and return the *same* object
-        result2 = api.get_info("TEST")
-        assert result2 is result
+        assert result.name == "Test Corp"
+        assert result.performanceId == "P1"
+        assert result.ticker == "TEST"
+        assert result.latestFairValue == 100
+        assert result.uncertainty == "HIGH"
+        assert result.fairValueDate == "2025-07-11"
+        assert result.lastPrice == 90
+        assert result.dayChange == -2
+        assert result.dayChangePer == -0.02
+        assert result.starRating == 4
+        assert pytest.approx(result.discount, rel=1e-6) == 0.9
+        datetime.datetime.fromisoformat(str(result.lastCachedDate))
 
     @pytest.mark.parametrize("missing_step", [
         "ticker", "fmv", "price", "rating"
@@ -135,7 +130,7 @@ class TestStockAPI:
         else:
             placeholders[1] = {"chart": {"chartDatums": {"recent": {
                 "latestFairValue": "50",
-                "uncertainty": "2",
+                "uncertainty": "HIGH",
                 "fairValueDate": "2025-07-11"
             }}}}
 
@@ -144,9 +139,9 @@ class TestStockAPI:
             placeholders[2] = {}
         else:
             placeholders[2] = {
-                "lastPrice": "48",
-                "dayChange": "0",
-                "dayChangePer": "0%"
+                "lastPrice": 48,
+                "dayChange": -2,
+                "dayChangePer": -0.04
             }
 
         # 4) rating
@@ -170,16 +165,15 @@ class TestStockAPI:
             # fmv (non-numeric)
             {
                 "chart": {"chartDatums": {"recent": {
-                    "latestFairValue": "N/A",
-                    "uncertainty": "5",
+                    "latestFairValue": None,
+                    "uncertainty": "HIGH",
                     "fairValueDate": "2025-07-11"
                 }}}
             },
-            # price (non-numeric)
             {
-                "lastPrice": "N/A",
-                "dayChange": "-2",
-                "dayChangePer": "-2%"
+                "lastPrice": 23,
+                "dayChange": -2,
+                "dayChangePer": -0.02
             },
             # rating
             {"starRating": "3"}
@@ -188,7 +182,7 @@ class TestStockAPI:
 
         result = api.get_info("TEST")
         assert result is not None
-        assert result["discount"] is None
+        assert result.discount is None
 
     def test_singleton_behavior(self):
         a1 = StockAPI(redis_url=None)

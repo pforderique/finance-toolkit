@@ -8,6 +8,7 @@ import itertools
 import logging
 from typing import Any
 
+import pydantic
 import redis
 
 from screener import config
@@ -21,7 +22,6 @@ RateLimiter = rate_limiter.RateLimiter
 RedisCache = cache.RedisCache
 RedisUrl = cache.RedisUrl
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 _UNEXPECTED_RESPONSE_MSG = "[%s] unexpected response format in %s - %s"
@@ -30,6 +30,23 @@ _UNEXPECTED_RESPONSE_MSG = "[%s] unexpected response format in %s - %s"
 def _has_keys(container: Container, keys: Iterable[str]) -> bool:
     """Return True if all keys are present in the container."""
     return all(key in container for key in keys)
+
+
+class StockInfo(pydantic.BaseModel):
+    """Model for stock information."""
+
+    name: str
+    ticker: str
+    performanceId: str
+    lastPrice: float
+    dayChange: float
+    dayChangePer: float
+    latestFairValue: float | None = None
+    discount: float | None = None
+    uncertainty: str | None = None
+    starRating: int | None = None
+    fairValueDate: str | None = None
+    lastCachedDate: str | None = None
 
 
 class StockAPI:
@@ -73,7 +90,7 @@ class StockAPI:
         self._redis_client = redis.Redis.from_url(redis_url.get_full_url())
         self._ms_cache = RedisCache.from_client(
             self._redis_client, namespace="msapi")
-        self._stock_cache = RedisCache.from_client(
+        self.stock_cache = RedisCache.from_client(
             self._redis_client, namespace="stockapi")
 
         self._client = APIClient(
@@ -98,7 +115,7 @@ class StockAPI:
         self,
         symbol: str,
         check_cache: bool = True
-    ) -> dict[str, Any] | None:
+    ) -> StockInfo | None:
         """
         Fetch aggregated stock info for `symbol`.
 
@@ -109,7 +126,7 @@ class StockAPI:
         Returns:
             Parsed JSON response with stock info or None if not found.
         """
-        if check_cache and (data := self._stock_cache.get(symbol)) is not None:
+        if check_cache and (data := self.stock_cache.get(symbol)) is not None:
             return data
 
         # Fetch ticker info to get performance ID
@@ -143,40 +160,44 @@ class StockAPI:
         star_rating_info = ms_results["star_rating"]
 
         # Calculate additional fields
-        try:
-            latest_fair_value = float(fmv_info["latestFairValue"])
-            last_price = float(price_info["lastPrice"])
-        except (ValueError, TypeError) as e:
-            # handle "N/A" cases
+        last_price = float(price_info["lastPrice"])
+        if (fmv := fmv_info.get("latestFairValue")) is None:
             logger.warning(
-                "[%s] non-numeric values - fmv_info %s - price_info %s - %s",
-                symbol, fmv_info, price_info, e
+                "[%s] non-numeric values - fmv_info %s", symbol, fmv_info,
             )
             latest_fair_value = None
-            last_price = None
             discount = None
         else:
+            latest_fair_value = float(fmv)
             discount = last_price / latest_fair_value
 
-        # Aggregate all info into a single response
+        try:
+            star_rating = int(star_rating_info["starRating"])
+        except ValueError:
+            # handle "N/A" cases
+            logger.warning(
+                "[%s] non-numeric values - star_rating_info %s", symbol, star_rating_info,
+            )
+            star_rating = None
+
         stock_info = {
             "name": ticker_info["Name"],
             "performanceId": performance_id,
             "ticker": ticker_info["RegionAndTicker"].split(":")[-1],
-            "latestFairValue": fmv_info["latestFairValue"],
+            "latestFairValue": latest_fair_value,
             "uncertainty": fmv_info["uncertainty"],
             "fairValueDate": fmv_info["fairValueDate"],
-            "lastPrice": price_info["lastPrice"],
-            "dayChange": price_info["dayChange"],
-            "dayChangePer": price_info["dayChangePer"],
-            "starRating": star_rating_info["starRating"],
+            "lastPrice": last_price,
+            "dayChange": float(price_info["dayChange"]),
+            "dayChangePer": float(price_info["dayChangePer"]),
+            "starRating": star_rating,
             "discount": discount,
             "lastCachedDate": datetime.datetime.now().isoformat(),
         }
 
-        self._stock_cache.set(symbol, stock_info)
+        self.stock_cache.set(symbol, stock_info)
 
-        return stock_info
+        return StockInfo.model_validate(stock_info)
 
     def _fetch_ticker_info(self, symbol: str) -> dict[str, Any] | None:
         """Fetch ticker info for a given symbol.
