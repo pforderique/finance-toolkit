@@ -173,7 +173,7 @@ class StockAPI:
 
         try:
             star_rating = int(star_rating_info["starRating"])
-        except ValueError:
+        except (ValueError, TypeError):
             # handle "N/A" cases
             logger.warning(
                 "[%s] non-numeric values - star_rating_info %s", symbol, star_rating_info,
