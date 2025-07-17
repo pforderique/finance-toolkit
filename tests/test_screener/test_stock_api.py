@@ -62,7 +62,7 @@ def fake_client_get_factory(responses: list[Any]):
 
 class TestStockAPI:
     def test_get_info_happy_path(self):
-        api = StockAPI(redis_url=None)
+        api = StockAPI()
         stub = fake_client_get_factory([
             # auto-complete
             [{
@@ -115,7 +115,7 @@ class TestStockAPI:
         "ticker", "fmv", "price", "rating"
     ])
     def test_get_info_missing_data_returns_none(self, missing_step):
-        api = StockAPI(redis_url=None)
+        api = StockAPI()
 
         # Build a list of four placeholders, then overwrite only the missing step
         placeholders: list[Any] = [None, None, None, None]
@@ -160,7 +160,7 @@ class TestStockAPI:
         assert api.get_info("XYZ") is None
 
     def test_get_info_with_non_numeric_discount(self):
-        api = StockAPI(redis_url=None)
+        api = StockAPI()
         stub = fake_client_get_factory([
             # auto-complete
             [{
@@ -191,6 +191,6 @@ class TestStockAPI:
         assert result.discount is None
 
     def test_singleton_behavior(self):
-        a1 = StockAPI(redis_url=None)
-        a2 = StockAPI(redis_url=None)
+        a1 = StockAPI()
+        a2 = StockAPI()
         assert a1 is a2

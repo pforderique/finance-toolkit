@@ -69,10 +69,7 @@ class StockAPI:
                 cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(
-        self,
-        redis_url: RedisUrl | None = None,
-    ):
+    def __init__(self):
         # Prevent double‐init on singleton
         if getattr(self, "_initialized", False):
             return
