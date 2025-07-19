@@ -30,6 +30,9 @@ class FakeRedis:
     def exists(self, key) -> int:
         return int(key in self.store)
 
+    def ping(self) -> str:
+        return "PONG"
+
     def close(self):
         self.closed = True
 
@@ -122,6 +125,10 @@ class TestRedisCache:
         assert retrieved_value["key"] == "value"
         assert retrieved_value["number"] == 42
 
+    def test_ping_success(self):
+        cache_instance = RedisCache.from_url(RedisUrl(base_url="unused"))
+        assert cache_instance.ping() is True
+
     def test_close(self, patch_redis):
         cache_instance = RedisCache.from_url(RedisUrl(base_url="unused"))
         cache_instance.close()
@@ -147,3 +154,7 @@ class TestFakeCache:
     def test_get_non_existent_key(self):
         cache_instance = cache.FakeCache[str, str]()
         assert cache_instance.get(_KEY) is None
+
+    def test_ping(self):
+        cache_instance = cache.FakeCache[str, str]()
+        assert cache_instance.ping() is True

@@ -11,6 +11,7 @@ import urllib.parse
 
 import pydantic
 import redis
+import redis.exceptions
 
 
 K = TypeVar('K')
@@ -31,6 +32,10 @@ class Cache(abc.ABC, Generic[K, V]):
     @abc.abstractmethod
     def has(self, key: K) -> bool:
         """Return True if the key exists in cache."""
+
+    @abc.abstractmethod
+    def ping(self) -> bool:
+        """Return True if the cache is reachable."""
 
     @abc.abstractmethod
     def close(self) -> Self:
@@ -155,6 +160,13 @@ class RedisCache(Cache[str, Any]):
         """Return True if the key exists in cache."""
         return self._client.exists(self._prefixed(key)) == 1
 
+    def ping(self) -> bool:
+        try:
+            self._client.ping()
+        except redis.exceptions.ConnectionError:
+            return False
+        return True
+
     def close(self) -> Self:
         """Close the Redis connection cleanly."""
         self._client.close()
@@ -179,6 +191,9 @@ class FakeCache(Cache[K, V], Generic[K, V]):
 
     def has(self, key: K) -> bool:
         return key in self._store
+
+    def ping(self) -> bool:
+        return True
 
     def close(self) -> Self:
         return self
