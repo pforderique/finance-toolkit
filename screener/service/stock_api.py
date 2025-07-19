@@ -3,6 +3,7 @@
 from collections.abc import Container, Iterable
 from concurrent.futures import ThreadPoolExecutor
 import datetime
+import enum
 import threading
 import itertools
 import logging
@@ -47,6 +48,13 @@ class StockInfo(pydantic.BaseModel):
     starRating: int | None = None
     fairValueDate: str | None = None
     lastCachedDate: str
+
+
+class CacheOption(enum.Enum):
+    """Controls which sub-calls in get_info() consult the cache."""
+    CHECK_ALL = enum.auto()  # check cache everywhere
+    NO_CACHE = enum.auto()  # never hit any cache
+    NO_PRICE_CACHE = enum.auto()  # do not cache price info
 
 
 class StockAPI:
@@ -111,19 +119,22 @@ class StockAPI:
     def get_info(
         self,
         symbol: str,
-        check_cache: bool = True
+        cache_option: CacheOption = CacheOption.CHECK_ALL,
     ) -> StockInfo | None:
         """
         Fetch aggregated stock info for `symbol`.
 
         Args:
             symbol: Stock symbol to query (e.g. "AAPL").
-            check_cache: If True, will first check the stock_cache for existing data.
+            cache_option: Controls which sub-calls in get_info() consult the cache.
 
         Returns:
             Parsed JSON response with stock info or None if not found.
         """
-        if check_cache and (data := self.stock_cache.get(symbol)) is not None:
+        if (
+            cache_option == CacheOption.CHECK_ALL
+            and (data := self.stock_cache.get(symbol)) is not None
+        ):
             return StockInfo.model_validate(data)
 
         # Fetch ticker info to get performance ID
@@ -132,17 +143,28 @@ class StockAPI:
 
         performance_id = ticker_info["PerformanceId"]
 
+        check_fmv_cache = cache_option != CacheOption.NO_CACHE
+        check_price_cache = cache_option not in (
+            CacheOption.NO_CACHE, CacheOption.NO_PRICE_CACHE)
+        check_ratings_cache = cache_option != CacheOption.NO_CACHE
+
         ms_results: dict[str, dict[str, Any]] = {}
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {
                 "fmv": executor.submit(
-                    self._fetch_fmv_info, performance_id, check_cache
+                    self._fetch_fmv_info,
+                    performance_id,
+                    check_fmv_cache
                 ),
                 "price": executor.submit(
-                    self._fetch_latest_price_info, performance_id, check_cache
+                    self._fetch_latest_price_info,
+                    performance_id,
+                    check_price_cache
                 ),
                 "star_rating": executor.submit(
-                    self._fetch_star_rating_info, performance_id, check_cache
+                    self._fetch_star_rating_info,
+                    performance_id,
+                    check_ratings_cache
                 ),
             }
 
