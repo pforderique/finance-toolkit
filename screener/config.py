@@ -4,6 +4,7 @@ It includes API settings, rate limiting, caching, watchlist management, and logg
 """
 
 import os
+import logging
 import sys
 
 from dotenv import load_dotenv
@@ -42,7 +43,7 @@ ALERT_EMAILS: list[str] = [
 
 # ─── Logging & Misc ───────────────────────────────────────────────────────────
 
-LOG_LEVEL: str = "INFO"   # e.g. DEBUG, INFO, WARNING
+LOG_LEVEL: int = logging.INFO
 
 # ─── Watchlist ────────────────────────────────────────────────────────────────
 
