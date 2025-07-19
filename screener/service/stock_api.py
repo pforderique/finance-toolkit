@@ -52,9 +52,9 @@ class StockInfo(pydantic.BaseModel):
 
 class CacheOption(enum.Enum):
     """Controls which sub-calls in get_info() consult the cache."""
-    CHECK_ALL = enum.auto()  # check cache everywhere
-    NO_CACHE = enum.auto()  # never hit any cache
-    NO_PRICE_CACHE = enum.auto()  # do not cache price info
+    CHECK_ALL = enum.auto()  # check all caches
+    REFRESH_ALL = enum.auto()  # refresh all caches
+    REFRESH_PRICE_ONLY = enum.auto()  # refresh price cache only
 
 
 class StockAPI:
@@ -143,10 +143,10 @@ class StockAPI:
 
         performance_id = ticker_info["PerformanceId"]
 
-        check_fmv_cache = cache_option != CacheOption.NO_CACHE
+        check_fmv_cache = cache_option != CacheOption.REFRESH_ALL
         check_price_cache = cache_option not in (
-            CacheOption.NO_CACHE, CacheOption.NO_PRICE_CACHE)
-        check_ratings_cache = cache_option != CacheOption.NO_CACHE
+            CacheOption.REFRESH_ALL, CacheOption.REFRESH_PRICE_ONLY)
+        check_ratings_cache = cache_option != CacheOption.REFRESH_ALL
 
         ms_results: dict[str, dict[str, Any]] = {}
         with ThreadPoolExecutor(max_workers=3) as executor:

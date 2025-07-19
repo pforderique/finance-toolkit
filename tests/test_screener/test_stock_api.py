@@ -257,7 +257,7 @@ class TestStockAPI:
         assert result1 is not None
 
         set_fake_client_get(api._client, _TEST_CORP_RESPONSES_2)
-        result2 = api.get_info("TEST", cache_option=CacheOption.NO_CACHE)
+        result2 = api.get_info("TEST", cache_option=CacheOption.REFRESH_ALL)
         assert result2 is not None
 
         assert result1.latestFairValue != result2.latestFairValue
@@ -272,7 +272,7 @@ class TestStockAPI:
         assert result is not None
 
         set_fake_client_get(api._client, _TEST_CORP_RESPONSES_2)
-        result2 = api.get_info("TEST", cache_option=CacheOption.NO_PRICE_CACHE)
+        result2 = api.get_info("TEST", cache_option=CacheOption.REFRESH_PRICE_ONLY)
         assert result2 is not None
 
         # Check that only price info has updated
