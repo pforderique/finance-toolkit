@@ -37,6 +37,10 @@ REDIS_URL: str = "redis://localhost:6379/0"
 
 # ─── Alerting ─────────────────────────────────────────────────────────────────
 
+EMAIL_SMTP_SERVER: str = "smtp.gmail.com"
+EMAIL_SMTP_PORT: int = 587
+EMAIL_USERNAME: str = os.getenv("EMAIL_USERNAME", "")
+EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")
 ALERT_EMAILS: list[str] = [
     email.strip() for email in os.getenv("ALERT_EMAILS", "").split(",")
 ]
