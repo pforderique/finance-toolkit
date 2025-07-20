@@ -6,6 +6,8 @@ data/*
 *pytest*
 *.egg-info
 .coverage
+logs/
+*.log
 
 # QC specific files
 **/lean.json
