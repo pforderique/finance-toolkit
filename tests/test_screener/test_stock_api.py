@@ -3,8 +3,9 @@ import pytest
 from typing import Any
 
 import redis
+import requests.exceptions
 
-from screener.service.stock_api import StockAPI, CacheOption
+from screener.service.stock_api import CacheOption, MSAPIKeysExhaustedError, StockAPI
 from screener.core.api_client import APIClient
 from screener.core.cache import RedisCache, FakeCache
 from screener import config
@@ -68,6 +69,8 @@ def reset_singleton():
     StockAPI._instance = None
 
 # Patch out redis client and RedisCache.from_url to use an in-memory FakeCache
+
+
 @pytest.fixture(autouse=True)
 def patch_redis_caches(monkeypatch):
     monkeypatch.setattr(
@@ -80,6 +83,8 @@ def patch_redis_caches(monkeypatch):
     )
 
 # Ensure config values are predictable
+
+
 @pytest.fixture(autouse=True)
 def patch_config(monkeypatch):
     monkeypatch.setattr(config, "MORNINGSTAR_API_KEYS", ["key1", "key2"])
@@ -88,6 +93,7 @@ def patch_config(monkeypatch):
     monkeypatch.setattr(config, "MORNINGSTAR_API_TIMEOUT", 0.1)
     monkeypatch.setattr(config, "MORNINGSTAR_API_MAX_RETRIES", 2)
     monkeypatch.setattr(config, "REDIS_URL", "redis://localhost:6379/0")
+
 
 def set_fake_client_get(client: APIClient, responses: list[Any]):
     """
@@ -103,7 +109,8 @@ def set_fake_client_get(client: APIClient, responses: list[Any]):
     mapping = dict(zip(ROUTES, responses))
 
     def stub(route: str, params=None, check_cache=True, retry=None):
-        print(f"Stub called for route: {route} with params: {params} and check_cache={check_cache}, retry={retry}")
+        print(
+            f"Stub called for route: {route} with params: {params} and check_cache={check_cache}, retry={retry}")
         if route not in mapping:
             pytest.fail(f"No stubbed response for route {route!r}")
 
@@ -120,6 +127,7 @@ def set_fake_client_get(client: APIClient, responses: list[Any]):
 
     client.get = stub
     return stub
+
 
 class TestStockAPI:
     def test_get_info_happy_path(self):
@@ -272,7 +280,8 @@ class TestStockAPI:
         assert result is not None
 
         set_fake_client_get(api._client, _TEST_CORP_RESPONSES_2)
-        result2 = api.get_info("TEST", cache_option=CacheOption.REFRESH_PRICE_ONLY)
+        result2 = api.get_info(
+            "TEST", cache_option=CacheOption.REFRESH_PRICE_ONLY)
         assert result2 is not None
 
         # Check that only price info has updated
@@ -283,6 +292,31 @@ class TestStockAPI:
         assert result2.latestFairValue == result.latestFairValue
         assert result2.uncertainty == result.uncertainty
         assert result2.starRating == result.starRating
+
+    def test_monthly_quota_triggers_rotation(self, monkeypatch):
+        api = StockAPI()
+        start_idx = 0
+
+        quota_error = '{"message":"You have exceeded the MONTHLY quota for Requests on your current plan"}'
+
+        def mock_get(route, params=None, check_cache=True, retry=None):
+            raise requests.exceptions.RetryError(quota_error)
+
+        api._client.get = mock_get
+
+        with pytest.raises(MSAPIKeysExhaustedError):
+            api.get_info("TEST")
+
+        # Ensure it rotated to the next key
+        assert api._current_key_index == start_idx + 1
+
+    def test_api_key_rotation_and_exhaustion(self):
+        api = StockAPI()
+        api._rotate_to_next_key()
+        assert api._current_key_index == 1
+
+        with pytest.raises(MSAPIKeysExhaustedError):
+            api._rotate_to_next_key()
 
     def test_singleton_behavior(self):
         a1 = StockAPI()

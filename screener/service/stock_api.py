@@ -1,16 +1,17 @@
 """StockAPI singleton for querying stock data using Morningstar."""
 
+
 from collections.abc import Container, Iterable
 from concurrent.futures import ThreadPoolExecutor
 import datetime
 import enum
 import threading
-import itertools
 import logging
 from typing import Any
 
 import pydantic
 import redis
+import requests.exceptions
 
 from screener import config
 from screener.core import api_client
@@ -26,6 +27,8 @@ RedisUrl = cache.RedisUrl
 logger = logging.getLogger(__name__)
 
 _UNEXPECTED_RESPONSE_MSG = "[%s] unexpected response format in %s - %s"
+_EXCCEEDED_MONTHLY_LIMIT_MSG = "You have exceeded the MONTHLY quota"
+_API_KEY_IDX_CACHE_KEY = "__api_key_index__"
 
 
 def _has_keys(container: Container, keys: Iterable[str]) -> bool:
@@ -57,6 +60,9 @@ class CacheOption(enum.Enum):
     REFRESH_PRICE_ONLY = enum.auto()  # refresh price cache only
 
 
+class MSAPIKeysExhaustedError(RuntimeError):
+    """Raised when all API keys are exhausted."""
+
 class StockAPI:
     """
     Singleton for querying stock data from Morningstar.
@@ -83,9 +89,6 @@ class StockAPI:
             return
         self._initialized = True
 
-        self._api_keys = config.MORNINGSTAR_API_KEYS.copy()
-        self._key_cycle = itertools.cycle(self._api_keys)
-
         self._rate_limiter = RateLimiter(
             max_calls=config.RATE_LIMIT_PER_SECOND,
             period=1.0,
@@ -107,14 +110,35 @@ class StockAPI:
         self._client.session.headers.update({
             "x-rapidapi-host": config.MORNINGSTAR_API_BASE_URL.split("//")[-1],
         })
-        self._use_api_key(next(self._key_cycle))
-
         self._default_max_retries = config.MORNINGSTAR_API_MAX_RETRIES
 
+        # Handle API keys
+        self._api_keys = config.MORNINGSTAR_API_KEYS.copy()
+        stored_idx = self.stock_cache.get(_API_KEY_IDX_CACHE_KEY)
+        if isinstance(stored_idx, int) and 0 <= stored_idx < len(self._api_keys):
+            start = stored_idx
+        else:
+            start = 0
+            self.stock_cache.set(_API_KEY_IDX_CACHE_KEY, start)
+
+        self._start_key_index = start
+        self._current_key_index = start
+        self._use_api_key(self._api_keys[self._current_key_index])
+
+
     def _use_api_key(self, key: str) -> None:
-        self._client.session.headers.update({
-            "x-rapidapi-key": key,
-        })
+        logger.info("Using API key #%d", self._current_key_index)
+        self._client.session.headers.update({"x-rapidapi-key": key})
+
+    def _rotate_to_next_key(self):
+        num_keys = len(self._api_keys)
+        next_idx = (self._current_key_index + 1) % num_keys
+        if next_idx == self._start_key_index:
+            raise MSAPIKeysExhaustedError("All API keys exhausted.")
+
+        self._current_key_index = next_idx
+        self._use_api_key(self._api_keys[self._current_key_index])
+        self.stock_cache.set(_API_KEY_IDX_CACHE_KEY, self._current_key_index)
 
     def get_info(
         self,
@@ -233,7 +257,7 @@ class StockAPI:
             - RegionAndTicker: Region and ticker in the format "Region:Ticker".
         """
         auto_complete_route = "market/v3/auto-complete"
-        ticker_infos = self._client.get(
+        ticker_infos = self._client_get_with_api_rotation(
             auto_complete_route,
             params={"q": symbol},
             check_cache=True,  # Always check cache for performance ID
@@ -278,7 +302,7 @@ class StockAPI:
             - fairValueDate: The date of the fair value calculation.
         """
         fmv_route = "stock/v2/get-price-fair-value"
-        fair_value_data_raw = self._client.get(
+        fair_value_data_raw = self._client_get_with_api_rotation(
             fmv_route,
             params={"performanceId": performance_id},
             check_cache=check_cache,
@@ -336,7 +360,7 @@ class StockAPI:
             - dayChangePer: The percentage change in price for the day.
         """
         price_route = "stock/v2/get-mini-chart-realtime-data"
-        price_data = self._client.get(
+        price_data = self._client_get_with_api_rotation(
             price_route,
             params={"performanceId": performance_id},
             check_cache=check_cache,
@@ -377,7 +401,7 @@ class StockAPI:
             - starRating: The star rating of the stock.
         """
         ratings_route = "stock/v2/get-security-info"
-        ratings_data = self._client.get(
+        ratings_data = self._client_get_with_api_rotation(
             ratings_route,
             params={"performanceId": performance_id},
             check_cache=check_cache,
@@ -399,6 +423,33 @@ class StockAPI:
             performance_id, ratings_route, ratings_data
         )
         return ratings_data
+
+
+    def _client_get_with_api_rotation(
+        self,
+        route: str,
+        params: dict[str, Any] | None = None,
+        check_cache: bool = True,
+        retry: int = 0,
+    ) -> Any:
+        """Wraps self._client.get() to handle API key rotation on errors."""
+        try:
+            return self._client.get(
+                route,
+                params=params,
+                check_cache=check_cache,
+                retry=retry
+            )
+        except requests.exceptions.RetryError as e:
+            if _EXCCEEDED_MONTHLY_LIMIT_MSG in str(e):
+                logger.warning(
+                    "[%s] Monthly API limit exceeded. rotating key.", route)
+                self._rotate_to_next_key()
+                return self._client_get_with_api_rotation(
+                    route, params, check_cache, retry
+                )
+            else:
+                raise e
 
     def __del__(self):
         """Clean up resources on deletion."""
