@@ -181,7 +181,7 @@ class APIClient:
                 )
 
             _logger.warning("[%s] Received retriable error: %s",
-                             route_key, _trunc(response.text))
+                            route_key, _trunc(response.text))
             retry_wait = min(retry_wait + backoff, max_retry_wait_time)
             backoff *= backoff_factor
 
@@ -190,8 +190,8 @@ class APIClient:
             f" {'tries' if attempt > 1 else 'try'}. Last response: "
             f"{response.text}"
         )
-        _logger.exception("[%s] Failed to call API after %d attempts. Last response: %s",
-                          route_key, attempt, _trunc(response.text))
+        _logger.error("[%s] Failed to call API after %d attempts. Last response: %s",
+                      route_key, attempt, _trunc(response.text), exc_info=False)
         raise err
 
     def _is_retriable_error(self, response: requests.Response) -> bool:
