@@ -63,6 +63,7 @@ class CacheOption(enum.Enum):
 class MSAPIKeysExhaustedError(RuntimeError):
     """Raised when all API keys are exhausted."""
 
+
 class StockAPI:
     """
     Singleton for querying stock data from Morningstar.
@@ -124,7 +125,7 @@ class StockAPI:
         self._start_key_index = start
         self._current_key_index = start
         self._use_api_key(self._api_keys[self._current_key_index])
-
+        self._rotate_lock = threading.RLock()
 
     def _use_api_key(self, key: str) -> None:
         logger.info("Using API key #%d", self._current_key_index)
@@ -424,7 +425,6 @@ class StockAPI:
         )
         return ratings_data
 
-
     def _client_get_with_api_rotation(
         self,
         route: str,
@@ -433,6 +433,7 @@ class StockAPI:
         retry: int = 0,
     ) -> Any:
         """Wraps self._client.get() to handle API key rotation on errors."""
+        orig_key_idx = self._current_key_index
         try:
             return self._client.get(
                 route,
@@ -441,15 +442,26 @@ class StockAPI:
                 retry=retry
             )
         except requests.exceptions.RetryError as e:
-            if _EXCCEEDED_MONTHLY_LIMIT_MSG in str(e):
-                logger.warning(
-                    "[%s] Monthly API limit exceeded. rotating key.", route)
-                self._rotate_to_next_key()
-                return self._client_get_with_api_rotation(
-                    route, params, check_cache, retry
-                )
-            else:
+            if _EXCCEEDED_MONTHLY_LIMIT_MSG not in str(e):
                 raise e
+
+            with self._rotate_lock:
+                # only rotate it no other thread has already rotated
+                if self._current_key_index == orig_key_idx:
+                    logger.warning(
+                        "[%s] Monthly API limit exceeded. rotating key.",
+                        route
+                    )
+                    self._rotate_to_next_key()
+                else:
+                    logger.warning(
+                        "[%s] Monthly API limit exceeded. key already rotated.",
+                        route
+                    )
+
+            return self._client_get_with_api_rotation(
+                route, params, check_cache, retry
+            )
 
     def __del__(self):
         """Clean up resources on deletion."""
