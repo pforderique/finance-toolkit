@@ -18,6 +18,11 @@ from screener.core import rate_limiter
 _logger = logging.getLogger(__name__)
 
 
+def _trunc(text: str, max_length: int = 100) -> str:
+    """Truncate text to a maximum length, appending '...' if truncated."""
+    return f"{text[:max_length]}..." if len(text) > max_length else text
+
+
 class APIClient:
     """
     Generic HTTP API client with caching and rate limiting capabilities.
@@ -136,7 +141,7 @@ class APIClient:
 
             if self.rate_limiter is not None:
                 if (wait := self.rate_limiter.wait()) > 0:
-                    _logger.info(
+                    _logger.warning(
                         "[%s] waiting %.2fs to avoid hitting rate limit",
                         route_key,
                         wait,
@@ -150,8 +155,7 @@ class APIClient:
                 route_key,
                 response.status_code,
                 response.reason,
-                f"{response.text[:100]}..."
-                    if len(response.text) > 100 else response.text
+                _trunc(response.text)
             )
 
             if response.status_code == http.HTTPStatus.OK:
@@ -163,21 +167,31 @@ class APIClient:
 
             if not self._is_retriable_error(response):
                 _logger.error(
-                    "[%s] HTTP %d %s - not a retriable error, raising exception",
+                    "[%s] HTTP %d %s - not a retriable error, raising HTTPError"
+                    " - %s",
                     route_key,
                     response.status_code,
-                    response.reason
+                    response.reason,
+                    _trunc(response.text)
                 )
-                response.raise_for_status()
+                raise requests.exceptions.HTTPError(
+                    f"[{route_key}] non-retriable error HTTP"
+                    f" {response.status_code} {response.reason}"
+                    f" - {_trunc(response.text)}"
+                )
 
+            _logger.warning("[%s] Received retriable error: %s",
+                             route_key, _trunc(response.text))
             retry_wait = min(retry_wait + backoff, max_retry_wait_time)
             backoff *= backoff_factor
 
         err = requests.exceptions.RetryError(
             f"[{route_key}] HTTP {response.status_code} after {attempt}"
-            f" {'tries' if attempt > 1 else 'try'}."
+            f" {'tries' if attempt > 1 else 'try'}. Last response: "
+            f"{response.text}"
         )
-        _logger.exception("[%s] FAILED to call.", route_key, exc_info=err)
+        _logger.exception("[%s] Failed to call API after %d attempts. Last response: %s",
+                          route_key, attempt, _trunc(response.text))
         raise err
 
     def _is_retriable_error(self, response: requests.Response) -> bool:
