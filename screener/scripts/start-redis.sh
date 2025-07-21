@@ -15,6 +15,12 @@ if nc -z localhost 6379; then
   exit 0
 fi
 
+# If a stopped or running container by that name exists, remove it:
+if docker ps -a --format '{{.Names}}' | grep -q '^financial-toolkit-redis$'; then
+  echo "🗑 Removing old Redis container..."
+  docker rm -f financial-toolkit-redis >/dev/null 2>&1
+fi
+
 echo "🚀 Starting Redis (data at $DATA_DIR)..."
 docker run -d \
   --name financial-toolkit-redis \
