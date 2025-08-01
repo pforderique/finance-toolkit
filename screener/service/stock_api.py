@@ -212,8 +212,15 @@ class StockAPI:
             latest_fair_value = None
             discount = None
         else:
-            latest_fair_value = float(fmv)
-            discount = last_price / latest_fair_value
+            try:
+                latest_fair_value = float(fmv)
+                discount = last_price / latest_fair_value
+            except (ValueError, TypeError):
+                logger.warning(
+                    "[%s] non-numeric values - latest_fair_value %s", symbol, fmv,
+                )
+                latest_fair_value = None
+                discount = None
 
         try:
             star_rating = int(star_rating_info["starRating"])

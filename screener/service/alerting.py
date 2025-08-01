@@ -76,7 +76,7 @@ def send_alerts(
         action_order = {"SELL": 0, "BUY": 1, "HOLD": 2, _NA: 3}
         discount_order = - \
             s.discount if s.discount is not None else float("inf")
-        star_order = s.starRating if s.starRating is not None else int("inf")
+        star_order = s.starRating if s.starRating is not None else float("inf")
         if s.action == "BUY":
             discount_order = -discount_order
             star_order = -star_order
