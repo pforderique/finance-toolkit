@@ -187,7 +187,7 @@ def main(args: argparse.Namespace) -> int:
             [s.ticker for s in stock_infos if s is not None],
             alert_emails
         )
-        alerting.send_alerts(stock_infos, alert_emails)
+        alerting.send_alerts(alert_emails, stock_infos, failed_symbols)
     else:
         _root_logger.warning(
             "no valid emails found in config.ALERT_EMAILS. skipping.")

@@ -10,6 +10,7 @@ from screener.service import stock_api
 
 StockAPI = stock_api.StockAPI
 StockInfo = stock_api.StockInfo
+_NA = "N/A"
 
 
 class StockRow(StockInfo):
@@ -28,7 +29,7 @@ def get_action(stock_data: StockInfo) -> str:
         str: Action to take ('BUY', 'SELL', 'HOLD').
     """
     if stock_data.discount is None:
-        return "N/A"
+        return _NA
 
     thresholds_by_uncertainty = {
         "Very Low": (0.95, 1.1),
@@ -56,9 +57,10 @@ def get_action(stock_data: StockInfo) -> str:
 
 
 def send_alerts(
+    alert_emails: Iterable[str],
     stock_infos: Sequence[StockInfo],
-    alert_emails: Iterable[str]
-) -> None:
+    failed_symbols: Iterable[str] | None = None
+) -> str:
     """
     Send a plaintext email listing each alerted stock's ticker, action,
     discount, and star rating to the given list of email addresses.
@@ -71,7 +73,7 @@ def send_alerts(
     """
     def sort_by_action(s: StockRow) -> tuple:
         """Sort by action, then rating, then discount, then by ticker."""
-        action_order = {"SELL": 0, "BUY": 1, "HOLD": 2, "N/A": 3}
+        action_order = {"SELL": 0, "BUY": 1, "HOLD": 2, _NA: 3}
         discount_order = - \
             s.discount if s.discount is not None else float("inf")
         star_order = s.starRating if s.starRating is not None else int("inf")
@@ -81,8 +83,7 @@ def send_alerts(
         return (action_order.get(s.action, 3), star_order, discount_order, s.ticker)
 
     stock_rows = sorted(
-        (StockRow(**s.model_dump(), action=get_action(s))
-         for s in stock_infos),
+        (StockRow(**s.model_dump(), action=get_action(s)) for s in stock_infos),
         key=sort_by_action
     )
 
@@ -93,20 +94,22 @@ def send_alerts(
         f"{'Ticker':<8}  {'Action':<6}  {'Discount':<8}  {'Rating':<6}"
     ]
     for s in stock_rows:
-        stars = "⭐"*s.starRating if s.starRating is not None else "N/A"
+        stars = "⭐"*s.starRating if s.starRating is not None else _NA
         text_lines.append(
-            f"{s.ticker:<8}  {s.action:<6}  {s.discount or 'N/A':<8}  {stars:<6}"
+            f"{s.ticker:<8}  {s.action:<6}  {s.discount or _NA:<8}  {stars:<6}"
         )
     text_body = "\n".join(text_lines)
 
     # HTML version
     html_rows = []
     for s in stock_rows:
-        discount = f"{s.discount:.2f}" if s.discount is not None else "N/A"
-        stars = "⭐" * s.starRating if s.starRating is not None else "N/A"
+        discount = f"{s.discount:.2f}" if s.discount is not None else _NA
+        stars = "⭐" * s.starRating if s.starRating is not None else _NA
+        day_change_per = f"{s.dayChangePer:.2f}%" if s.dayChangePer is not None else _NA
         html_rows.append(f"""
             <tr>
               <td><strong>{s.ticker}</strong></td>
+              <td>{day_change_per}</td>
               <td>{s.action}</td>
               <td>{discount}</td>
               <td>{stars}</td>
@@ -121,6 +124,7 @@ def send_alerts(
           <thead>
             <tr style="background-color: #f0f0f0;">
               <th>Ticker</th>
+              <th>Day %</th>
               <th>Action</th>
               <th>Discount</th>
               <th>Rating</th>
@@ -130,6 +134,7 @@ def send_alerts(
             {''.join(html_rows)}
           </tbody>
         </table>
+        {'<p>Failed symbols: ' + ', '.join(failed_symbols) + '</p>' if failed_symbols else ''}
       </body>
     </html>
     """
@@ -147,3 +152,5 @@ def send_alerts(
         smtp.starttls()
         smtp.login(config.EMAIL_USERNAME, config.EMAIL_PASSWORD)
         smtp.send_message(msg)
+
+    return html_body
