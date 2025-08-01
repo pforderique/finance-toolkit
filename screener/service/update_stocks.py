@@ -5,7 +5,9 @@ from collections.abc import Iterable
 from concurrent import futures
 import dataclasses
 import logging
+import pathlib
 import sys
+import subprocess
 import time
 
 import redis.exceptions
@@ -19,11 +21,12 @@ from screener.service import stock_api
 
 CacheOption = stock_api.CacheOption
 MSAPIKeysExhaustedError = stock_api.MSAPIKeysExhaustedError
+Path = pathlib.Path
 StockAPI = stock_api.StockAPI
 StockInfo = stock_api.StockInfo
 
 _root_logger = logging.getLogger("screener.service.update_stocks")
-_api = StockAPI()
+_screener_dir = Path(__file__).resolve().parent.parent
 
 
 @dataclasses.dataclass
@@ -55,11 +58,12 @@ def update_stock_data(
         MSAPIKeysExhaustedError: If all API keys are exhausted.
         redis.exceptions.ConnectionError: If Redis cache is not reachable.
     """
+    api = StockAPI()
 
     def work(sym: str) -> UpdateResult:
         t0 = time.perf_counter()
         try:
-            data = _api.get_info(sym, cache_option=cache_option)
+            data = api.get_info(sym, cache_option=cache_option)
         except (
             requests.exceptions.RetryError,
             requests.exceptions.Timeout,
@@ -112,6 +116,12 @@ def _validate_emails(emails: Iterable[str]) -> set[str]:
     return valid_emails
 
 
+def _call_redis_script(script: Path) -> bool:
+    """Call a Redis script and return True if successful, False otherwise."""
+    process = subprocess.run(["bash", str(script)], check=True)
+    return process.returncode == 0
+
+
 def main(args: argparse.Namespace) -> int:
     """Main entry point to update stock data and optionally send alerts."""
     _root_logger.info(
@@ -119,9 +129,10 @@ def main(args: argparse.Namespace) -> int:
         args.cache_option.name
     )
 
-    if not _api.stock_cache.ping():
-        _root_logger.error(
-            "Redis cache is not reachable at %s", config.REDIS_URL)
+    _root_logger.info("Starting Redis cache...")
+    start_redis_script = str(_screener_dir / "scripts" / "start-redis.sh")
+    if not _call_redis_script(Path(start_redis_script)):
+        _root_logger.critical("Failed to start Redis cache. Exiting.")
         return 1
 
     if not (unique_symbols := _validate_symbols(args.stocks.split(","))):
@@ -161,6 +172,11 @@ def main(args: argparse.Namespace) -> int:
                       synchronous_time / len(speeds) if speeds else 0)
     _root_logger.info("Total asynchronous time: %.2fs (%.2fs/stock)",
                       elapsed, elapsed / len(speeds) if speeds else 0)
+
+    _root_logger.info("Stopping Redis cache...")
+    stop_redis_script = str(_screener_dir / "scripts" / "stop-redis.sh")
+    if not _call_redis_script(Path(stop_redis_script)):
+        _root_logger.warning("Failed to stop Redis cache.")
 
     if not args.alert:
         return 0
