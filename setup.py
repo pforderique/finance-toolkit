@@ -7,6 +7,7 @@ setuptools.setup(
     version="0.1.0",
     packages=setuptools.find_packages(),
     install_requires=[
+        "google-api-python-client>=2.100.0",
         "npyscreen>=4.10.5",
         "pydantic>=2.11.7",
         "python-dotenv>=1.1.0",
@@ -14,6 +15,8 @@ setuptools.setup(
         "requests>=2.32.3",
         "setuptools>=68.0.0",
         "validators>=0.35.0",
+        "typer>=0.9.0",
+        "rich>=13.5.2",
     ],
     extras_require={
         "dev": [
