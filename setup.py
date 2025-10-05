@@ -1,9 +1,9 @@
-"""Setup script for the screener package."""
+"""Setup script for the finance-toolkit package."""
 
 import setuptools
 
 setuptools.setup(
-    name="screener",
+    name="finance-toolkit",
     version="0.1.0",
     packages=setuptools.find_packages(),
     install_requires=[
