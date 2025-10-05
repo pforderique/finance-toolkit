@@ -1,5 +1,4 @@
-data/*
-**/data/*
+**/data/
 **/__pycache__/
 **.env
 **/.vscode/
@@ -8,6 +7,8 @@ data/*
 .coverage
 logs/
 *.log
+build/
+**/out/
 
 # QC specific files
 **/lean.json
