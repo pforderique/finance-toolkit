@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Iterable, Optional
 
-from ms_screener.src import datamodel
+from ms_screener.src import analytics, datamodel
 from ms_screener.src import io_layer
 
 
@@ -388,3 +388,18 @@ def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> 
         changes.append(change_row)
 
     return changes
+
+def snapshot_row_to_public_row(row: dict) -> dict:
+    """Convert a snapshot row to a public-facing row by selecting specific columns."""
+    return {column: row.get(column) for column in analytics.SNAPSHOT_HEADERS}
+
+def snapshot_row_to_sheets_row(row: dict) -> dict:
+    """Replace certain fields in a row with hyperlink formulas."""
+    updated_row = row.copy()
+    ticker = row.get(OutColumn.TICKER)
+    perf_id = row.get(analytics.PERF_ID_KEY)
+    if perf_id and ticker:
+        url = f"https://research-morningstar-com.ezproxy.spl.org/quotes/{perf_id}"
+        updated_row[OutColumn.TICKER] = f'=HYPERLINK("{url}","{ticker}")'
+
+    return updated_row

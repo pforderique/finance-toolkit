@@ -58,5 +58,4 @@ def build_snapshot(full_rows: List[dict]) -> List[dict]:
         payload[PERF_ID_KEY] = row.get(InColumn.PERFORMANCE_ID)
         snapshot.append(payload)
 
-    snapshot.sort(key=lambda item: item.get(OutColumn.DISCOUNT, -1.0))
     return snapshot
