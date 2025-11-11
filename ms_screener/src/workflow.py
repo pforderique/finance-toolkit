@@ -154,9 +154,7 @@ def run_workflow(cfg: RunConfig) -> RunResult:
     console.rule("[bold]Updating Sheet[/bold]")
     sheets_link = io_layer.sheets_url_for(cfg.sheet_id)
     if cfg.sheet_id and not cfg.dry_run:
-        sheet_rows: list[dict] = []
-        for row in snapshot:
-            sheet_rows.append(transform.snapshot_row_to_sheets_row(row))
+        sheet_rows = transform.snapshot_to_sheets_rows(snapshot)
 
         try:
             io_layer.update_sheet(

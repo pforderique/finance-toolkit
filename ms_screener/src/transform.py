@@ -393,13 +393,22 @@ def snapshot_row_to_public_row(row: dict) -> dict:
     """Convert a snapshot row to a public-facing row by selecting specific columns."""
     return {column: row.get(column) for column in analytics.SNAPSHOT_HEADERS}
 
-def snapshot_row_to_sheets_row(row: dict) -> dict:
+def snapshot_to_sheets_rows(snapshot_rows: list[dict]) -> list[dict]:
     """Replace certain fields in a row with hyperlink formulas."""
-    updated_row = row.copy()
-    ticker = row.get(OutColumn.TICKER)
-    perf_id = row.get(analytics.PERF_ID_KEY)
-    if perf_id and ticker:
-        url = f"https://research-morningstar-com.ezproxy.spl.org/quotes/{perf_id}"
-        updated_row[OutColumn.TICKER] = f'=HYPERLINK("{url}","{ticker}")'
+    updated_rows: list[dict] = []
+    for sheet_idx, row in enumerate(sorted(snapshot_rows, key=lambda x: x.get(OutColumn.PRICE_CHANGE, -1.0)), start=2):
+        updated_row = row.copy()
+        ticker = row.get(OutColumn.TICKER)
+        perf_id = row.get(analytics.PERF_ID_KEY)
+        if perf_id and ticker:
+            url = f"https://research-morningstar-com.ezproxy.spl.org/quotes/{perf_id}"
+            updated_row[OutColumn.TICKER] = f'=HYPERLINK("{url}","{ticker}")'
 
-    return updated_row
+        if ticker:
+            updated_row[OutColumn.LAST_PRICE] = f'=GOOGLEFINANCE("{ticker}")'
+            updated_row[OutColumn.PRICE_CHANGE] = f'=GOOGLEFINANCE("{ticker}","changepct")/100'
+            updated_row[OutColumn.DISCOUNT] = f'=D{sheet_idx}/E{sheet_idx}'
+
+        updated_rows.append(updated_row)
+
+    return updated_rows
