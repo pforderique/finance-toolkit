@@ -1,5 +1,6 @@
 """Analytics functions for financial data processing."""
 
+from datetime import date
 from typing import List, Optional
 
 from ms_screener.src import datamodel
@@ -19,7 +20,8 @@ SNAPSHOT_HEADERS = [
     OutColumn.MOAT,
     OutColumn.STARS,
     InColumn.RATINGS_DATE,
-    OutColumn.IS_QUANT,
+    OutColumn.LAST_SCRAPED,
+    # OutColumn.IS_QUANT,
 ]
 
 PERF_ID_KEY = "_perf_id"
@@ -53,7 +55,8 @@ def build_snapshot(full_rows: List[dict]) -> List[dict]:
             OutColumn.MOAT: row.get(OutColumn.MOAT),
             OutColumn.STARS: row.get(OutColumn.STARS),
             InColumn.RATINGS_DATE: row.get(InColumn.RATINGS_DATE),
-            OutColumn.IS_QUANT: row.get(OutColumn.IS_QUANT),
+            # OutColumn.IS_QUANT: row.get(OutColumn.IS_QUANT),
+            OutColumn.LAST_SCRAPED: date.today().isoformat()
         }
         payload[PERF_ID_KEY] = row.get(InColumn.PERFORMANCE_ID)
         snapshot.append(payload)

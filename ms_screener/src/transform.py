@@ -396,7 +396,10 @@ def snapshot_row_to_public_row(row: dict) -> dict:
 def snapshot_to_sheets_rows(snapshot_rows: list[dict]) -> list[dict]:
     """Replace certain fields in a row with hyperlink formulas."""
     updated_rows: list[dict] = []
-    for sheet_idx, row in enumerate(sorted(snapshot_rows, key=lambda x: x.get(OutColumn.PRICE_CHANGE, -1.0)), start=2):
+    for sheet_idx, row in enumerate(
+        sorted(snapshot_rows, key=lambda x: x.get(OutColumn.PRICE_CHANGE, -1.0)),
+        start=2
+    ):
         updated_row = row.copy()
         ticker = row.get(OutColumn.TICKER)
         perf_id = row.get(analytics.PERF_ID_KEY)

@@ -36,6 +36,7 @@ class OutColumn(str, Enum):
     MOAT = "moat"
     STARS = "stars"
     DISCOUNT = "discount"
+    LAST_SCRAPED = "last_scraped"
     IS_QUANT = "is_quant"
     SOURCE_FILE = "source_file"
 
