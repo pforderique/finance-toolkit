@@ -4,7 +4,7 @@ import datetime as dt
 import os
 import re
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, Optional
 
 from ms_screener.src import datamodel
 from ms_screener.src import io_layer
@@ -32,11 +32,11 @@ FMV_CHANGE_HEADERS = [
 ]
 
 
-def normalize_collected_data(rows: Iterable[dict]) -> Tuple[List[dict], List[str]]:
+def normalize_collected_data(rows: Iterable[dict]) -> tuple[list[dict], list[str]]:
     """Normalize and validate collected data rows."""
 
-    warnings: List[str] = []
-    normalized: List[dict] = []
+    warnings: list[str] = []
+    normalized: list[dict] = []
     seen_ticker = set()
     seen_perf = set()
 
@@ -90,7 +90,7 @@ def coerce_date(value: str | None) -> Optional[str]:
     return None
 
 
-def strip_q(value: str | None) -> Tuple[Optional[str], bool]:
+def strip_q(value: str | None) -> tuple[Optional[str], bool]:
     """Strip 'Q' or ' q ' from a string, returning the cleaned string and a boolean flag."""
     if value is None:
         return None, False
@@ -170,7 +170,7 @@ def coerce_int(value: Optional[object]) -> Optional[int]:
     return to_int(str(value))
 
 
-def parse_mstar_csv(path: Path) -> List[dict]:
+def parse_mstar_csv(path: Path) -> list[dict]:
     """Parse a raw Morningstar CSV file into normalized rows."""
     raw = io_layer.read_csv_any(path)
     # clean up column names
@@ -178,7 +178,7 @@ def parse_mstar_csv(path: Path) -> List[dict]:
         for k, v in list(row.items()):
             row[k.strip()] = v
 
-    results: List[dict] = []
+    results: list[dict] = []
 
     ms_company_col = "Name"
     ms_moat_col = "Economic Moat"
@@ -243,7 +243,7 @@ def parse_mstar_csv(path: Path) -> List[dict]:
     return results
 
 
-def merge_dedupe(rows: List[dict]) -> List[dict]:
+def merge_dedupe(rows: list[dict]) -> list[dict]:
     """Merge and deduplicate rows based on ticker, preferring latest ratings date and file mtime."""
     by_ticker: dict[str, dict] = {}
     file_mtime: dict[str, float] = {}
@@ -279,17 +279,18 @@ def merge_dedupe(rows: List[dict]) -> List[dict]:
     return list(by_ticker.values())
 
 
-def merge_with_collected_data(data_rows: List[dict], collected_rows: List[dict]) -> List[dict]:
+def merge_with_collected_data(data_rows: list[dict], collected_rows: list[dict]) -> list[dict]:
     """Merge normalized data rows with collected data based on ticker."""
     collected_map = {
-        row[InColumn.TICKER]: row for row in collected_rows if row.get(InColumn.TICKER)}
-    merged: List[dict] = []
+        row[InColumn.TICKER]: row for row in collected_rows
+        if row.get(InColumn.TICKER)
+    }
+    merged: list[dict] = []
 
     for row in data_rows:
         ticker = row.get(OutColumn.TICKER)
         if not ticker:
-            print(
-                "Warning: Skipping row with missing ticker during merge with collected data.")
+            print(f"Warning: ticker {ticker} from data not in collected.")
             continue
         collected = collected_map.get(ticker, {})
         collected_clean = {k: v for k,
@@ -300,13 +301,13 @@ def merge_with_collected_data(data_rows: List[dict], collected_rows: List[dict])
     return merged
 
 
-def diff_snapshots(prev_rows: List[dict], curr_rows: List[dict]) -> List[dict]:
+def diff_snapshots(prev_rows: list[dict], curr_rows: list[dict]) -> list[dict]:
     """Diff two snapshots and return rows with changes in key fields."""
     prior = {
         row[InColumn.PERFORMANCE_ID]: row for row in prev_rows
         if row.get(InColumn.PERFORMANCE_ID)
     }
-    changes: List[dict] = []
+    changes: list[dict] = []
 
     for row in curr_rows:
         perf = row.get(InColumn.PERFORMANCE_ID)
@@ -323,7 +324,7 @@ def diff_snapshots(prev_rows: List[dict], curr_rows: List[dict]) -> List[dict]:
     return changes
 
 
-def compare_ready_perf_ids(collected_rows: Iterable[dict]) -> List[str]:
+def compare_ready_perf_ids(collected_rows: Iterable[dict]) -> list[str]:
     """Extract valid performance IDs from collected data for comparison links."""
     perf_ids = []
     for row in collected_rows:
@@ -333,7 +334,7 @@ def compare_ready_perf_ids(collected_rows: Iterable[dict]) -> List[str]:
     return sorted(set(perf_ids))
 
 
-def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> List[dict]:
+def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> list[dict]:
     """Identify tickers where fair value changed between previous and current snapshots."""
 
     prev_by_ticker: dict[str, dict] = {}
@@ -344,7 +345,7 @@ def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> 
         if ticker:
             prev_by_ticker[ticker] = row
 
-    changes: List[dict] = []
+    changes: list[dict] = []
     for row in curr_rows:
         ticker_value = row.get(OutColumn.TICKER) or ""
         ticker = ticker_value.strip().upper()
