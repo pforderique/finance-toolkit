@@ -165,6 +165,13 @@ def run_workflow(cfg: RunConfig) -> RunResult:
     io_layer.write_snapshot(updated_snapshot_path, constants.SHEET_RANGE_NAMES, padded_snapshot_rows)
 
     _render_summary_table(updates, additions, removals)
+    net_equity_change = _calculate_equity_delta(updates + additions + removals)
+    net_equity_text = _format_currency_delta(net_equity_change)
+    color = "green" if net_equity_change > 0 else "red" if net_equity_change < 0 else None
+    if color:
+        console.print(f"[cyan]Net equity delta:[/cyan] [{color}]{net_equity_text}[/{color}]")
+    else:
+        console.print(f"[cyan]Net equity delta:[/cyan] {net_equity_text}")
 
     for warning in warnings:
         print_warning(warning)
@@ -218,30 +225,56 @@ def _render_summary_table(
     table.add_column("Account")
     table.add_column("Shares")
     table.add_column("Avg. Cost")
+    table.add_column("Equity Δ")
+
+    rows: List[tuple[float, str, ChangeRecord, str, str, str]] = []
 
     for record in updates:
-        table.add_row(
-            "Update",
-            record.ticker,
-            record.account_label,
-            _change_repr(record.prior_shares, record.new_shares),
-            _change_repr(record.prior_avg_cost, record.new_avg_cost),
+        rows.append(
+            (
+                _equity_delta(record),
+                "Update",
+                record,
+                _change_repr(record.prior_shares, record.new_shares),
+                _change_repr(record.prior_avg_cost, record.new_avg_cost),
+                _format_equity_delta(record),
+            )
         )
+
     for record in additions:
-        table.add_row(
-            "Add",
-            record.ticker,
-            record.account_label,
-            _change_repr(None, record.new_shares),
-            _change_repr(None, record.new_avg_cost),
+        rows.append(
+            (
+                _equity_delta(record),
+                "Add",
+                record,
+                _change_repr(None, record.new_shares),
+                _change_repr(None, record.new_avg_cost),
+                _format_equity_delta(record),
+            )
         )
+
     for record in removals:
+        rows.append(
+            (
+                _equity_delta(record),
+                "Remove",
+                record,
+                _change_repr(record.prior_shares, None),
+                _change_repr(record.prior_avg_cost, None),
+                _format_equity_delta(record),
+            )
+        )
+
+    for _, action, record, shares_text, avg_cost_text, equity_text in sorted(
+        rows, key=lambda entry: entry[0], reverse=True
+    ):
         table.add_row(
-            "Remove",
+            action,
             record.ticker,
             record.account_label,
-            _change_repr(record.prior_shares, None),
-            _change_repr(record.prior_avg_cost, None),
+            shares_text,
+            avg_cost_text,
+            equity_text,
         )
 
     if table.row_count:
@@ -258,3 +291,38 @@ def _change_repr(old: float | None, new: float | None) -> str:
     if new is not None:
         parts.append(str(round(new, 6)))
     return " ".join(parts)
+
+
+def _calculate_equity_delta(records: List[ChangeRecord]) -> float:
+    return sum(
+        _equity_delta(record)
+        for record in records
+    )
+
+
+def _format_equity_delta(record: ChangeRecord) -> str:
+    delta = _equity_delta(record)
+    formatted = _format_currency_delta(delta)
+    color = "green" if delta > 0 else "red" if delta < 0 else None
+    if color:
+        return f"[{color}]{formatted}[/{color}]"
+    return formatted
+
+
+def _equity_delta(record: ChangeRecord) -> float:
+    return _equity_value(record.new_shares, record.new_avg_cost) - _equity_value(
+        record.prior_shares, record.prior_avg_cost
+    )
+
+
+def _format_currency_delta(value: float) -> str:
+    if abs(value) <= 1e-6:
+        return "$0.00"
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}${abs(value):,.2f}"
+
+
+def _equity_value(shares: float | None, avg_cost: float | None) -> float:
+    if shares is None or avg_cost is None:
+        return 0.0
+    return shares * avg_cost
