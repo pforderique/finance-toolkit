@@ -396,8 +396,12 @@ def snapshot_row_to_public_row(row: dict) -> dict:
 def snapshot_to_sheets_rows(snapshot_rows: list[dict]) -> list[dict]:
     """Replace certain fields in a row with hyperlink formulas."""
     updated_rows: list[dict] = []
+    def _price_change_sort_key(row: dict) -> float:
+        value = row.get(OutColumn.PRICE_CHANGE)
+        return value if isinstance(value, (int, float)) else -1.0
+
     for sheet_idx, row in enumerate(
-        sorted(snapshot_rows, key=lambda x: x.get(OutColumn.PRICE_CHANGE, -1.0)),
+        sorted(snapshot_rows, key=_price_change_sort_key),
         start=2
     ):
         updated_row = row.copy()

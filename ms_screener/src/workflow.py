@@ -145,7 +145,12 @@ def run_workflow(cfg: RunConfig) -> RunResult:
     merged_rows = transform.merge_dedupe(all_ms_rows)
     snapshot_rows = transform.merge_with_collected_data(merged_rows, collected)
     snapshot = analytics.build_snapshot(snapshot_rows)
-    snapshot.sort(key=lambda item: item.get(OutColumn.PRICE_CHANGE, -1.0))
+
+    def _price_change_sort_key(row: dict) -> float:
+        value = row.get(OutColumn.PRICE_CHANGE)
+        return value if isinstance(value, (int, float)) else -1.0
+
+    snapshot.sort(key=_price_change_sort_key)
 
     console.rule("[bold]Outputs[/bold]")
     snapshot_csv_path = io_layer.snapshot_path(cfg.out_dir)
