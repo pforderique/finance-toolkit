@@ -52,6 +52,7 @@ ACCOUNT_NAME_TO_SHEET_LABEL = {
     "Roth IRA": "Fidelity Roth IRA",
     "Health Savings Account": "Fidelity HSA",
     "HSA": "Fidelity HSA",
+    "BROAD INSTITUTE 401K": "Fidelity Broad 401K",
 }
 
 # Symbols to omit by prefix (upper-case)
