@@ -50,7 +50,8 @@ def run(
 
     if not sheet_id:
         console.print(
-            "[red]Error:[/red] Missing sheet id. Provide --sheet-id or set the SHEET_ID environment variable."
+            "[red]Error:[/red] Missing sheet id."
+            " Provide --sheet-id or set the SHEET_ID environment variable."
         )
         raise typer.Exit(code=2)
 

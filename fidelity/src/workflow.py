@@ -44,7 +44,12 @@ def run_workflow(cfg: RunConfig) -> RunResult:
     artifacts_dir = cfg.ensure_artifacts_dir()
     timestamp_label = cfg.timestamp.strftime('%Y%m%d-%H%M%S')
     previous_snapshot_path = artifacts_dir / f"{timestamp_label}_previous_portfolio.csv"
-    io_layer.write_snapshot(previous_snapshot_path, constants.SHEET_RANGE_NAMES, padded_snapshot_rows, rows_before_header=title_row)
+    io_layer.write_snapshot(
+        previous_snapshot_path,
+        constants.SHEET_RANGE_NAMES,
+        padded_snapshot_rows,
+        rows_before_header=title_row,
+    )
 
     change_records_updates: List[ChangeRecord] = []
     change_records_removals: List[ChangeRecord] = []
@@ -59,7 +64,8 @@ def run_workflow(cfg: RunConfig) -> RunResult:
                 existing_map[key] = (list_index, sheet_row)
             else:
                 warnings.append(
-                    f"Duplicate Fidelity row detected in sheet for {sheet_row.ticker} / {sheet_row.account_label}"
+                    "Duplicate Fidelity row detected in sheet for"
+                    f"{sheet_row.ticker} / {sheet_row.account_label}"
                 )
 
     # Track which indices to remove
@@ -89,7 +95,10 @@ def run_workflow(cfg: RunConfig) -> RunResult:
         updated_shares = holding.shares
         updated_avg_cost = holding.avg_cost
 
-        if _needs_update(prior_shares, updated_shares) or _needs_update(prior_avg_cost, updated_avg_cost):
+        if (
+            _needs_update(prior_shares, updated_shares)
+            or _needs_update(prior_avg_cost, updated_avg_cost)
+        ):
             raw_row[1] = _format_numeric(updated_shares)  # column B
             raw_row[2] = _format_numeric(updated_avg_cost)  # column C
             raw_row[6] = sheet_row.account_label  # column G
