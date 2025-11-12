@@ -150,6 +150,7 @@ def run_workflow(cfg: RunConfig) -> RunResult:
 
     if not cfg.dry_run:
         io_layer.write_portfolio_table(cfg.sheet_id, cfg.tab_name, padded_snapshot_rows)
+        io_layer.sort_portfolio_table(cfg.sheet_id, cfg.tab_name, len(padded_snapshot_rows))
         print_success("Google Sheet updated successfully")
     else:
         print_warning("Dry run enabled; no Google Sheet updates were applied")

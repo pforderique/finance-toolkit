@@ -208,6 +208,66 @@ def write_portfolio_table(sheet_id: str, tab: str, rows: List[List[str]]) -> Non
         raise RuntimeError(base_message) from exc
 
 
+def sort_portfolio_table(sheet_id: str, tab: str, row_count: int, descending: bool = True) -> None:
+    """Sort the synced range by the equity column using Google Sheets so formulas relink."""
+
+    if row_count <= 1:
+        return
+
+    service = _get_sheets_service()
+    try:
+        metadata = (
+            service.spreadsheets()
+            .get(
+                spreadsheetId=sheet_id,
+                fields="sheets(properties(sheetId,title))",
+            )
+            .execute()
+        )
+    except Exception as exc:  # pragma: no cover - network call
+        raise RuntimeError("Failed to load spreadsheet metadata for sorting") from exc
+
+    sheet_props = None
+    for sheet in metadata.get("sheets", []):
+        props = sheet.get("properties", {})
+        if props.get("title") == tab:
+            sheet_props = props
+            break
+
+    if not sheet_props:
+        raise RuntimeError(f"Tab '{tab}' not found while attempting to sort the sheet")
+
+    start_row_index = constants.SHEET_RANGE_START_ROW - 1
+    equity_column_index = constants.SHEET_RANGE_COLUMNS.index("E")
+    sort_order = "DESCENDING" if descending else "ASCENDING"
+
+    sort_request = {
+        "sortRange": {
+            "range": {
+                "sheetId": sheet_props.get("sheetId"),
+                "startRowIndex": start_row_index,
+                "endRowIndex": start_row_index + row_count,
+                "startColumnIndex": 0,
+                "endColumnIndex": len(constants.SHEET_RANGE_COLUMNS),
+            },
+            "sortSpecs": [
+                {
+                    "dimensionIndex": equity_column_index,
+                    "sortOrder": sort_order,
+                }
+            ],
+        }
+    }
+
+    try:
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=sheet_id,
+            body={"requests": [sort_request]},
+        ).execute()
+    except Exception as exc:  # pragma: no cover - network call
+        raise RuntimeError("Failed to sort Google Sheet after updating rows") from exc
+
+
 def write_snapshot(
         path: Path, 
         headers: Sequence[str], 
