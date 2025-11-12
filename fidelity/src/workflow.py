@@ -51,9 +51,9 @@ def run_workflow(cfg: RunConfig) -> RunResult:
         rows_before_header=title_row,
     )
 
-    change_records_updates: List[ChangeRecord] = []
-    change_records_removals: List[ChangeRecord] = []
-    change_records_additions: List[ChangeRecord] = []
+    updates: List[ChangeRecord] = []
+    removals: List[ChangeRecord] = []
+    additions: List[ChangeRecord] = []
     existing_map: Dict[Tuple[str, str], Tuple[int, SheetRow]] = {}
 
     for idx, sheet_row in enumerate(table_state.rows):
@@ -65,7 +65,7 @@ def run_workflow(cfg: RunConfig) -> RunResult:
             else:
                 warnings.append(
                     "Duplicate Fidelity row detected in sheet for"
-                    f"{sheet_row.ticker} / {sheet_row.account_label}"
+                    f" <{sheet_row.ticker} | {sheet_row.account_label}>"
                 )
 
     # Track which indices to remove
@@ -75,7 +75,7 @@ def run_workflow(cfg: RunConfig) -> RunResult:
         holding = holdings_map.get(key)
         if holding is None:
             indices_to_remove.append(list_index)
-            change_records_removals.append(
+            removals.append(
                 ChangeRecord(
                     action="removed",
                     ticker=sheet_row.ticker,
@@ -102,7 +102,7 @@ def run_workflow(cfg: RunConfig) -> RunResult:
             raw_row[1] = _format_numeric(updated_shares)  # column B
             raw_row[2] = _format_numeric(updated_avg_cost)  # column C
             raw_row[6] = sheet_row.account_label  # column G
-            change_records_updates.append(
+            updates.append(
                 ChangeRecord(
                     action="updated",
                     ticker=sheet_row.ticker,
@@ -117,7 +117,9 @@ def run_workflow(cfg: RunConfig) -> RunResult:
 
     # Remove rows by deleting in reverse order to keep indices stable
     for idx in sorted(indices_to_remove, reverse=True):
-        del padded_snapshot_rows[idx]
+        # del padded_snapshot_rows[idx]
+        # instead of deleting, blank out the row to preserve formulas in other rows
+        padded_snapshot_rows[idx] = [""] * len(padded_snapshot_rows[idx])
 
     # Add new holdings remaining in holdings_map
     start_idx = table_state.start_row_index + len(table_state.rows)
@@ -134,7 +136,7 @@ def run_workflow(cfg: RunConfig) -> RunResult:
         new_row[5] = f_template.format(row=idx)
         new_row[6] = holding.account_label
         padded_snapshot_rows.append(new_row)
-        change_records_additions.append(
+        additions.append(
             ChangeRecord(
                 action="added",
                 ticker=holding.ticker,
@@ -153,7 +155,7 @@ def run_workflow(cfg: RunConfig) -> RunResult:
         print_warning("Dry run enabled; no Google Sheet updates were applied")
 
     change_log_records = [asdict(record) for record in (
-        change_records_updates + change_records_additions + change_records_removals
+        updates + additions + removals
     )]
     edits_path = artifacts_dir / f"{timestamp_label}_edits.json"
     io_layer.write_change_log(edits_path, change_log_records)
@@ -161,7 +163,7 @@ def run_workflow(cfg: RunConfig) -> RunResult:
     updated_snapshot_path = artifacts_dir / f"{timestamp_label}_updated_portfolio.csv"
     io_layer.write_snapshot(updated_snapshot_path, constants.SHEET_RANGE_NAMES, padded_snapshot_rows)
 
-    _render_summary_table(change_records_updates, change_records_additions, change_records_removals)
+    _render_summary_table(updates, additions, removals)
 
     for warning in warnings:
         print_warning(warning)
@@ -172,9 +174,9 @@ def run_workflow(cfg: RunConfig) -> RunResult:
 
     return RunResult(
         total_rows_processed=len(holdings),
-        updates=change_records_updates,
-        removals=change_records_removals,
-        additions=change_records_additions,
+        updates=updates,
+        removals=removals,
+        additions=additions,
         warnings=warnings,
         previous_snapshot_path=previous_snapshot_path,
         updated_snapshot_path=updated_snapshot_path,
