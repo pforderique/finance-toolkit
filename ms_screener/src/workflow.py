@@ -8,6 +8,7 @@ from typing import List
 from rich.table import Table
 
 from ms_screener.src import analytics
+from ms_screener.src import auto_download
 from ms_screener.src import io_layer
 from ms_screener.src import transform
 from ms_screener.src.datamodel import OutColumn
@@ -76,7 +77,7 @@ def run_workflow(cfg: RunConfig) -> RunResult:
 
     warnings: List[str] = []
 
-    console.rule("[bold]Collected Data[/bold]")
+    console.rule("[bold]Read Collected Data Tab[/bold]")
     raw_collected, collected_warnings = io_layer.fetch_collected_data(
         cfg.sheet_id, cfg.data_tab, cfg.data_dir)
     collected, normalization_warnings = transform.normalize_collected_data(
@@ -91,26 +92,46 @@ def run_workflow(cfg: RunConfig) -> RunResult:
             len(perf_ids) / cfg.compare_batch_size) if perf_ids else 0
     else:
         link_batches = len(perf_ids)
+    console.print("[dim]done.[/dim]")
 
     console.rule("[bold]Compare Links[/bold]")
     console.print(
-        f"[green]• Compare links:[/green] {links_path}  ([dim]{len(perf_ids)} IDs → {link_batches} link(s)[/dim])"
+        f"[green]• Compare links:[/green] {links_path}"
+        f"  ([dim]{len(perf_ids)} IDs → {link_batches} link(s)[/dim])"
     )
     with open(links_path, "r", encoding="utf-8") as f:
         for idx, line in enumerate(f):
             console.print(
                 f"=> [link={line.strip()}]Compare Link {idx + 1}[/link]")
 
-    console.rule("[bold]Drag & Drop CSVs[/bold]")
-    console.print(
-        "[cyan]You can now drag and drop the exported Morningstar compare CSV files into the terminal or file explorer window.[/cyan]\n"
-        "Place the files in the './data' directory or specify their location with --files/--folder as needed.\n"
-        "Press Enter after you have placed the files to continue..."
-    )
-    paths = _resolve_paths(input(
-        "Drag and drop the CSV file(s) or a folder containing them here, then"
-        " press Enter: "
-    ).strip())
+    paths: List[Path]
+    if cfg.files:
+        paths = cfg.files
+    elif cfg.folder:
+        folder = cfg.folder.expanduser()
+        if not folder.exists() or not folder.is_dir():
+            raise RuntimeError(f"Provided folder does not exist: {folder}")
+        paths = sorted(folder.glob("*.csv"))
+        if not paths:
+            raise RuntimeError(f"No CSV files found in folder {folder}")
+    elif cfg.auto:
+        console.rule("[bold]Auto Download[/bold]")
+        try:
+            paths = auto_download.download_compare_csvs(
+                links_path, headless=cfg.auto_headless)
+        except auto_download.AutoDownloadError as exc:
+            raise RuntimeError(str(exc)) from exc
+    else:
+        console.rule("[bold]Drag & Drop CSVs[/bold]")
+        console.print(
+            "[cyan]You can now drag and drop the exported Morningstar compare CSV files into the terminal or file explorer window.[/cyan]\n"
+            "Place the files in the './data' directory or specify their location with --files/--folder as needed.\n"
+            "Press Enter after you have placed the files to continue..."
+        )
+        paths = _resolve_paths(input(
+            "Drag and drop the CSV file(s) or a folder containing them here, then"
+            " press Enter: "
+        ).strip())
 
     all_ms_rows: List[dict] = []
     for path in paths:

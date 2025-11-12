@@ -33,6 +33,13 @@ def run(
         False, "--dry-run", help="Do everything except write to Google Sheets"),
     log_level: str = typer.Option(
         "INFO", "--log-level", help="Log verbosity: DEBUG/INFO/WARN/ERROR"),
+    auto: bool = typer.Option(
+        False, "--auto", help="Automatically log in and download Morningstar CSVs"),
+    auto_headless: bool = typer.Option(
+        True,
+        "--auto-headless/--auto-visible",
+        help="Run the automation headless (default) or show the browser window",
+    ),
 ):
     """Run the Morningstar workflow end-to-end."""
     configure_logging(log_level)
@@ -46,6 +53,8 @@ def run(
         changes_tab=changes_tab,
         dry_run=dry_run,
         log_level=log_level.upper(),
+        auto=auto,
+        auto_headless=auto_headless,
     )
 
     try:

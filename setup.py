@@ -17,6 +17,8 @@ setuptools.setup(
         "validators>=0.35.0",
         "typer>=0.9.0",
         "rich>=13.5.2",
+        "selenium>=4.21.0",
+        "webdriver-manager>=4.0.2",
     ],
     extras_require={
         "dev": [

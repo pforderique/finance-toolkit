@@ -12,6 +12,7 @@ DEFAULT_DATA_TAB = "collected_data"
 DEFAULT_SNAPSHOT_TAB = "Screener"
 DEFAULT_CHANGES_TAB = "FairValueChanges"
 DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_AUTO_HEADLESS = True
 
 
 @dataclass
@@ -28,6 +29,8 @@ class RunConfig:
     out_dir: Path = DEFAULT_OUT_DIR
     data_dir: Path = DEFAULT_DATA_DIR
     compare_batch_size: int = DEFAULT_COMPARE_BATCH_SIZE
+    auto: bool = False
+    auto_headless: bool = DEFAULT_AUTO_HEADLESS
 
 
 @dataclass
