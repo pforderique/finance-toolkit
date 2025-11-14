@@ -48,6 +48,7 @@ SHEET_DESCRIPTION_COL = "Description"
 ACCOUNT_NAME_TO_SHEET_LABEL = {
     "Individual": "Fidelity Brokerage",
     "Brokerage": "Fidelity Brokerage",
+    "Individual": "Fidelity Brokerage",
     "ROTH IRA": "Fidelity Roth IRA",
     "Roth IRA": "Fidelity Roth IRA",
     "Health Savings Account": "Fidelity HSA",
