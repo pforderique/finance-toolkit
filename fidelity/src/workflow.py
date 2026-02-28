@@ -123,7 +123,6 @@ def run_workflow(cfg: RunConfig) -> RunResult:
 
     # Add new holdings remaining in holdings_map
     start_idx = table_state.start_row_index + len(table_state.rows)
-    d_template = '=IFERROR(GOOGLEFINANCE(A{row}), "")'
     e_template = '=IF(NOT(B{row}*D{row}=0), B{row}*D{row}, "")'
     f_template = '=IF(C{row}=0, "", (D{row}/C{row})-1)'
     for idx, holding in enumerate(holdings_map.values(), start=start_idx):
@@ -131,7 +130,7 @@ def run_workflow(cfg: RunConfig) -> RunResult:
         new_row[0] = holding.ticker
         new_row[1] = _format_numeric(holding.shares)
         new_row[2] = _format_numeric(holding.avg_cost)
-        new_row[3] = d_template.format(row=idx)
+        new_row[3] = _market_price_formula(row_index=idx, holding=holding)
         new_row[4] = e_template.format(row=idx)
         new_row[5] = f_template.format(row=idx)
         new_row[6] = holding.account_label
@@ -212,6 +211,17 @@ def _needs_update(old: float | None, new: float) -> bool:
 
 def _format_numeric(value: float | None) -> str:
     return f"{value:.6f}".rstrip("0").rstrip(".") if value is not None else ""
+
+
+def _market_price_formula(*, row_index: int, holding: HoldingRecord) -> str:
+    custom_formula = constants.CUSTOM_MARKET_PRICE_FORMULAS_BY_TICKER.get(holding.ticker)
+    if custom_formula is None and holding.description:
+        custom_formula = constants.CUSTOM_MARKET_PRICE_FORMULAS_BY_DESCRIPTION.get(
+            holding.description
+        )
+    if custom_formula:
+        return custom_formula
+    return f'=IFERROR(GOOGLEFINANCE(A{row_index}), "")'
 
 
 def _render_summary_table(
