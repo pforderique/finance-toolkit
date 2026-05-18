@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def configure_logging(level: str) -> None:
@@ -36,3 +37,9 @@ def print_warnings(warnings: Iterable[str]) -> None:
         return
     body = "\n".join(f"• {msg}" for msg in items)
     console.print(Panel(body, title="Warnings", border_style="yellow"))
+
+
+def alert_fmv_change(count: int, tab_name: str, dry_run: bool = False) -> None:
+    """Log FMV changes detected. Extensible for future alerting."""
+    prefix = "[DRY RUN] " if dry_run else ""
+    logger.info(f"{prefix}• FMV history appended: {count} changes → tab {tab_name}")

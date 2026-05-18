@@ -20,6 +20,7 @@ NOT_AVAILABLE = "N/A"
 ERR = "ERR"
 
 FMV_CHANGE_HEADERS = [
+    "date",
     OutColumn.TICKER,
     OutColumn.COMPANY,
     "previous_fair_value",
@@ -345,6 +346,7 @@ def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> 
         if ticker:
             prev_by_ticker[ticker] = row
 
+    today_iso = dt.date.today().isoformat()
     changes: list[dict] = []
     for row in curr_rows:
         ticker_value = row.get(OutColumn.TICKER) or ""
@@ -369,6 +371,7 @@ def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> 
             delta = round_to(curr_fv - prev_fv, 2)
 
         change_row = {
+            "date": today_iso,
             OutColumn.TICKER: row.get(OutColumn.TICKER) or prev_row.get(OutColumn.TICKER),
             OutColumn.COMPANY: row.get(OutColumn.COMPANY) or prev_row.get(OutColumn.COMPANY),
             "previous_fair_value": round_to(prev_fv, 2),
@@ -383,7 +386,7 @@ def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> 
                 prev_row.get(InColumn.RATINGS_DATE) or prev_row.get(
                     InColumn.RATINGS_DATE.title())
             ),
-            "current_rating_date": row.get(InColumn.RATINGS_DATE),
+            "current_rating_date": today_iso,
         }
         changes.append(change_row)
 

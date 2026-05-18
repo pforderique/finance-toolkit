@@ -13,7 +13,7 @@ from ms_screener.src import io_layer
 from ms_screener.src import transform
 from ms_screener.src.datamodel import OutColumn
 from ms_screener.src.config import RunConfig, RunResult
-from ms_screener.src.logging_setup import console, print_header, print_warnings, timestamp
+from ms_screener.src.logging_setup import console, print_header, print_warnings, timestamp, alert_fmv_change
 
 
 def _resolve_paths(raw_input_value: str) -> List[Path]:
@@ -152,20 +152,18 @@ def run_workflow(cfg: RunConfig) -> RunResult:
 
     snapshot.sort(key=_price_change_sort_key)
 
+    # Read current snapshot from sheet BEFORE writing new one to detect FMV changes
+    try:
+        prev_snapshot = io_layer.read_sheet_as_dicts(cfg.sheet_id, cfg.snapshot_tab)
+    except Exception:
+        prev_snapshot = []
+
+    # Detect changes in fair value
+    fmv_changes = transform.detect_fmv_changes(prev_snapshot, snapshot)
+
     console.rule("[bold]Outputs[/bold]")
     snapshot_csv_path = io_layer.snapshot_path(cfg.out_dir)
-
-    # if snapshot_csv_path.exists():
-    #     previous_snapshot_rows: list[dict] = io_layer.read_csv_any(snapshot_csv_path)
-    #     fmv_changes = transform.detect_fmv_changes(
-    #         previous_snapshot_rows, snapshot)
-    #     fmv_changes_csv = cfg.out_dir / "fair_value_changes.csv"
-    #     io_layer.write_csv(fmv_changes_csv, fmv_changes,
-    #                     headers=transform.FMV_CHANGE_HEADERS)
-    #    console.print(
-    #        f"[green]• Fair value deltas logged:[/green] {len(fmv_changes)}")
-    fmv_changes = []
-    fmv_changes_csv = cfg.out_dir / "fair_value_changes.csv"
+    fmv_changes_csv = cfg.out_dir / "fmv_changes.csv"
 
     snapshot_public_rows = [
         transform.snapshot_row_to_public_row(row) for row in snapshot
@@ -177,6 +175,31 @@ def run_workflow(cfg: RunConfig) -> RunResult:
         f" {snapshot_csv_path} ({len(snapshot)} rows)"
     )
 
+    # Append to FMV history tab if changes exist
+    if fmv_changes and not cfg.dry_run and cfg.sheet_id:
+        try:
+            io_layer.append_to_sheet(
+                cfg.sheet_id,
+                cfg.fmv_history_tab,
+                fmv_changes,
+                headers=transform.FMV_CHANGE_HEADERS
+            )
+        except RuntimeError as exc:
+            warnings.append(f"FMV history append failed: {exc}")
+        else:
+            alert_fmv_change(len(fmv_changes), cfg.fmv_history_tab)
+            console.print(
+                "[green]• FMV history appended:[/green]"
+                f" {cfg.fmv_history_tab} ({len(fmv_changes)} rows)"
+            )
+    elif fmv_changes and cfg.dry_run:
+        alert_fmv_change(len(fmv_changes), cfg.fmv_history_tab, dry_run=True)
+        console.print(
+            "[yellow]• [DRY RUN] FMV history would append:[/yellow]"
+            f" {cfg.fmv_history_tab} ({len(fmv_changes)} rows)"
+        )
+
+    # Write new snapshot to sheet
     console.rule("[bold]Updating Sheet[/bold]")
     sheets_link = io_layer.sheets_url_for(cfg.sheet_id)
     if cfg.sheet_id and not cfg.dry_run:
@@ -209,6 +232,10 @@ def run_workflow(cfg: RunConfig) -> RunResult:
                 "[green]• Fair value tab updated:[/green]"
                 f" {cfg.changes_tab} ({len(fmv_changes)} rows)"
             )
+
+    # Write local FMV changes CSV (overwrite is fine for local)
+    if fmv_changes:
+        io_layer.write_csv(fmv_changes_csv, fmv_changes, headers=transform.FMV_CHANGE_HEADERS)
 
     print_warnings(warnings)
 

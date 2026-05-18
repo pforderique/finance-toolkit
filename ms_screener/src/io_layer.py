@@ -287,3 +287,74 @@ def snapshot_path(out_dir: Path) -> Path:
     """Get the path to the snapshot CSV file, ensuring the directory exists."""
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir / "snapshot.csv"
+
+
+def append_to_sheet(sheet_id: str, tab: str, rows: List[dict], headers: Optional[Sequence[str]] = None) -> None:
+    """Append rows to a Google Sheet tab (append-only, never overwrites).
+
+    - If tab is empty: write headers (if provided), then data rows
+    - If tab has data: append data rows only
+    - Uses insertDataOption="INSERT_ROWS" for append semantics
+    """
+
+    service = _get_sheets_service()
+
+    # Read current tab to determine if it has data
+    try:
+        existing_rows = read_sheet_as_dicts(sheet_id, tab)
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError(f"Failed to read {tab} tab: {exc}") from exc
+
+    if not rows:
+        return
+
+    # Determine headers
+    resolved_headers: List[str] = list(headers or (list(rows[0].keys()) if rows else []))
+
+    if not resolved_headers:
+        return
+
+    # Format data rows
+    body_values: List[List] = []
+    for row in rows:
+        body_values.append([_format_sheet_value(row.get(column)) for column in resolved_headers])
+
+    # Determine append position
+    if not existing_rows:
+        # Tab is empty: write headers + data rows
+        body_values.insert(0, list(resolved_headers))
+        range_name = f"{tab}!A1"
+    else:
+        # Tab has data: append data rows only (no headers)
+        num_existing_rows = len(existing_rows) + 1  # +1 for header row
+        range_name = f"{tab}!A{num_existing_rows + 1}"
+
+    try:
+        service.spreadsheets().values().append(
+            spreadsheetId=sheet_id,
+            range=range_name,
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": body_values},
+        ).execute()
+    except Exception as exc:  # pragma: no cover - network call
+        detail = getattr(exc, "content", None)
+        if detail and isinstance(detail, (bytes, bytearray)):
+            try:
+                payload = json.loads(detail.decode("utf-8"))
+                error_message = payload.get("error", {}).get("message")
+            # pylint: disable=broad-except
+            except Exception:
+                error_message = None
+        elif hasattr(exc, "error_details"):
+            error_message = str(exc.error_details)
+        else:
+            error_message = str(exc)
+
+        base_message = (
+            f"Failed to append to {tab} tab. Confirm the tab exists and the service account "
+            "has Editor access."
+        )
+        if error_message:
+            raise RuntimeError(f"{base_message} (Google error: {error_message})") from exc
+        raise RuntimeError(base_message) from exc
