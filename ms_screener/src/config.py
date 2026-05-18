@@ -11,6 +11,7 @@ DEFAULT_COMPARE_BATCH_SIZE = 50
 DEFAULT_DATA_TAB = "collected_data"
 DEFAULT_SNAPSHOT_TAB = "Screener"
 DEFAULT_CHANGES_TAB = "FairValueChanges"
+DEFAULT_FMV_HISTORY_TAB = "FMV_History"
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_AUTO_HEADLESS = True
 
@@ -24,6 +25,7 @@ class RunConfig:
     files: List[Path] = field(default_factory=list)
     snapshot_tab: str = DEFAULT_SNAPSHOT_TAB
     changes_tab: str = DEFAULT_CHANGES_TAB
+    fmv_history_tab: str = DEFAULT_FMV_HISTORY_TAB
     dry_run: bool = False
     log_level: str = DEFAULT_LOG_LEVEL
     out_dir: Path = DEFAULT_OUT_DIR

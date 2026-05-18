@@ -29,6 +29,8 @@ def run(
         "Screener", "--snapshot-tab", help="Output tab for snapshot (Sheets)"),
     changes_tab: str = typer.Option(
         "FMV_Tracker", "--changes-tab", help="Output tab for fair value deltas (Sheets)"),
+    fmv_history_tab: str = typer.Option(
+        "FMV_History", "--fmv-history-tab", help="Output tab for FMV history (append-only, Sheets)"),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Do everything except write to Google Sheets"),
     log_level: str = typer.Option(
@@ -51,6 +53,7 @@ def run(
         files=files or [],
         snapshot_tab=snapshot_tab,
         changes_tab=changes_tab,
+        fmv_history_tab=fmv_history_tab,
         dry_run=dry_run,
         log_level=log_level.upper(),
         auto=auto,
