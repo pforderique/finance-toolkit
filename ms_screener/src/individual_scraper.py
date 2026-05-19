@@ -241,20 +241,17 @@ def _extract_uncertainty(soup: BeautifulSoup) -> Optional[str]:
 def _extract_ratings_date(soup: BeautifulSoup) -> Optional[str]:
     """Extract Ratings_Date from 'Published on' date in analysis header."""
     try:
-        for span in soup.find_all("span", class_="date-section"):
+        for span in soup.find_all("span"):
+            if "date-section" not in (span.get("class") or []):
+                continue
             text = span.get_text(strip=True)
             if "published on" in text.lower():
-                date_match = span.get_text(strip=True)
-                for fmt in ["%b %d, %Y", "%B %d, %Y"]:
-                    try:
-                        parts = date_match.split("Published on")
-                        if len(parts) > 1:
-                            date_str = parts[1].strip()
-                            normalized = _normalize_date(date_str)
-                            if normalized:
-                                return normalized
-                    except ValueError:
-                        continue
+                parts = text.split("Published on")
+                if len(parts) > 1:
+                    date_str = parts[1].strip()
+                    normalized = _normalize_date(date_str)
+                    if normalized:
+                        return normalized
         return None
     except Exception as exc:
         console.print(f"[dim]Debug: Ratings_Date parse failed: {exc}[/dim]")
