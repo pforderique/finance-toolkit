@@ -222,15 +222,16 @@ def _scrape_one(driver: Chrome, ticker: str, perf_id: str) -> Optional[dict]:
 
 
 def _extract_uncertainty(soup: BeautifulSoup) -> Optional[str]:
-    """Extract Uncertainty value from page HTML."""
+    """Extract Uncertainty value from page HTML (in SVG text elements)."""
     try:
-        for cell in soup.find_all("td"):
-            if cell.get_text(strip=True).lower() == "uncertainty":
-                next_cell = cell.find_next("td")
-                if next_cell:
-                    value = next_cell.get_text(strip=True)
-                    if value in {"Low", "Medium", "High", "Very High", "Extreme"}:
-                        return value
+        for svg in soup.find_all("svg"):
+            tspans = svg.find_all("tspan")
+            for i, tspan in enumerate(tspans):
+                if tspan.get_text(strip=True).lower() == "uncertainty":
+                    if i + 1 < len(tspans):
+                        value = tspans[i + 1].get_text(strip=True)
+                        if value in {"Low", "Medium", "High", "Very High", "Extreme"}:
+                            return value
         return None
     except Exception as exc:
         console.print(f"[dim]Debug: Uncertainty parse failed: {exc}[/dim]")
@@ -238,19 +239,22 @@ def _extract_uncertainty(soup: BeautifulSoup) -> Optional[str]:
 
 
 def _extract_ratings_date(soup: BeautifulSoup) -> Optional[str]:
-    """Extract Ratings_Date from Fair Value section."""
+    """Extract Ratings_Date from 'Published on' date in analysis header."""
     try:
-        for text in soup.find_all(string=True):
-            text_lower = text.lower()
-            if "fair value" in text_lower:
-                parent = text.parent
-                if parent:
-                    sibling_text = parent.get_next_sibling()
-                    if sibling_text:
-                        date_str = str(sibling_text).strip()
-                        normalized = _normalize_date(date_str)
-                        if normalized:
-                            return normalized
+        for span in soup.find_all("span", class_="date-section"):
+            text = span.get_text(strip=True)
+            if "published on" in text.lower():
+                date_match = span.get_text(strip=True)
+                for fmt in ["%b %d, %Y", "%B %d, %Y"]:
+                    try:
+                        parts = date_match.split("Published on")
+                        if len(parts) > 1:
+                            date_str = parts[1].strip()
+                            normalized = _normalize_date(date_str)
+                            if normalized:
+                                return normalized
+                    except ValueError:
+                        continue
         return None
     except Exception as exc:
         console.print(f"[dim]Debug: Ratings_Date parse failed: {exc}[/dim]")
