@@ -239,7 +239,12 @@ def _extract_uncertainty(soup: BeautifulSoup) -> Optional[str]:
 
 
 def _extract_ratings_date(soup: BeautifulSoup) -> Optional[str]:
-    """Extract Ratings_Date from 'Published on' date in analysis header."""
+    """
+    Extract Ratings_Date from 'Published on' date in analysis header.
+
+    Note: Availability varies by page; some stocks may not have this date in HTML.
+    May require clicking 'Download Equity Report' button to expose PDF-based dates.
+    """
     try:
         for span in soup.find_all("span"):
             if "date-section" not in (span.get("class") or []):
