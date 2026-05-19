@@ -181,9 +181,6 @@ def run_workflow(cfg: RunConfig) -> RunResult:
                     links_path, headless=cfg.auto_headless)
         except auto_download.AutoDownloadError as exc:
             raise RuntimeError(str(exc)) from exc
-        finally:
-            if driver and cfg.scrape_individual:
-                pass
     else:
         console.rule("[bold]Drag & Drop CSVs[/bold]")
         console.print(
@@ -203,39 +200,6 @@ def run_workflow(cfg: RunConfig) -> RunResult:
 
     console.print(
         f"[green]• Parsed rows:[/green] {len(all_ms_rows)} from {len(paths)} file(s)")
-
-    if cfg.scrape_individual and driver:
-        console.rule("[bold]Individual Page Scrape[/bold]")
-        moat_by_ticker = {r[OutColumn.TICKER]: r[OutColumn.MOAT] for r in all_ms_rows}
-        stocks = [
-            {
-                "ticker": row[InColumn.TICKER],
-                "perf_id": row[InColumn.PERFORMANCE_ID],
-                "ratings_date": row.get(InColumn.RATINGS_DATE),
-                "uncertainty": row.get(InColumn.UNCERTAINTY),
-                "moat": moat_by_ticker.get(row[InColumn.TICKER]),
-            }
-            for row in collected
-            if row.get(InColumn.PERFORMANCE_ID)
-        ]
-        try:
-            scrape_result = individual_scraper.scrape_individual_pages(
-                driver, stocks,
-                max_stocks=cfg.scrape_max_stocks,
-                rate_limit_seconds=cfg.scrape_rate_limit,
-            )
-            if scrape_result.updated and cfg.sheet_id:
-                if not cfg.dry_run:
-                    _apply_scraped_to_collected(cfg, collected, scrape_result.updated)
-                else:
-                    console.print(
-                        f"[yellow]• [DRY RUN] Would update {len(scrape_result.updated)} rows"
-                        f" in {cfg.data_tab}[/yellow]"
-                    )
-        finally:
-            if driver:
-                driver.quit()
-                driver = None
 
     console.rule("[bold]Create Snapshot[/bold]")
     merged_rows = transform.merge_dedupe(all_ms_rows)
@@ -332,6 +296,42 @@ def run_workflow(cfg: RunConfig) -> RunResult:
     # Write local FMV changes CSV (overwrite is fine for local)
     if fmv_changes:
         io_layer.write_csv(fmv_changes_csv, fmv_changes, headers=transform.FMV_CHANGE_HEADERS)
+
+    # Individual page scraping (after all CSV/snapshot updates succeed)
+    if cfg.scrape_individual and driver:
+        console.rule("[bold]Individual Page Scrape[/bold]")
+        moat_by_ticker = {r[OutColumn.TICKER]: r[OutColumn.MOAT] for r in all_ms_rows}
+        stocks = [
+            {
+                "ticker": row[InColumn.TICKER],
+                "perf_id": row[InColumn.PERFORMANCE_ID],
+                "ratings_date": row.get(InColumn.RATINGS_DATE),
+                "uncertainty": row.get(InColumn.UNCERTAINTY),
+                "moat": moat_by_ticker.get(row[InColumn.TICKER]),
+            }
+            for row in collected
+            if row.get(InColumn.PERFORMANCE_ID)
+        ]
+        try:
+            scrape_result = individual_scraper.scrape_individual_pages(
+                driver, stocks,
+                max_stocks=cfg.scrape_max_stocks,
+                rate_limit_seconds=cfg.scrape_rate_limit,
+            )
+            if scrape_result.updated and cfg.sheet_id:
+                if not cfg.dry_run:
+                    _apply_scraped_to_collected(cfg, collected, scrape_result.updated)
+                else:
+                    console.print(
+                        f"[yellow]• [DRY RUN] Would update {len(scrape_result.updated)} rows"
+                        f" in {cfg.data_tab}[/yellow]"
+                    )
+        except Exception as exc:
+            warnings.append(f"Individual page scraping failed: {exc}")
+        finally:
+            if driver:
+                driver.quit()
+                driver = None
 
     print_warnings(warnings)
 
