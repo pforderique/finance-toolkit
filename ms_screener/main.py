@@ -42,6 +42,21 @@ def run(
         "--auto-headless/--auto-visible",
         help="Run the automation headless (default) or show the browser window",
     ),
+    scrape_individual: bool = typer.Option(
+        False,
+        "--scrape-individual/--no-scrape-individual",
+        help="Scrape individual Morningstar pages for Uncertainty and Ratings_Date (requires --auto)",
+    ),
+    scrape_max_stocks: int = typer.Option(
+        20,
+        "--scrape-max-stocks",
+        help="Maximum number of stocks to scrape per run (safety cap)",
+    ),
+    scrape_rate_limit: float = typer.Option(
+        3.0,
+        "--scrape-rate-limit",
+        help="Rate limit in seconds between individual page requests",
+    ),
 ):
     """Run the Morningstar workflow end-to-end."""
     configure_logging(log_level)
@@ -58,6 +73,9 @@ def run(
         log_level=log_level.upper(),
         auto=auto,
         auto_headless=auto_headless,
+        scrape_individual=scrape_individual,
+        scrape_max_stocks=scrape_max_stocks,
+        scrape_rate_limit=scrape_rate_limit,
     )
 
     try:

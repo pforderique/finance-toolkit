@@ -33,6 +33,9 @@ class RunConfig:
     compare_batch_size: int = DEFAULT_COMPARE_BATCH_SIZE
     auto: bool = False
     auto_headless: bool = DEFAULT_AUTO_HEADLESS
+    scrape_individual: bool = False
+    scrape_max_stocks: int = 20
+    scrape_rate_limit: float = 3.0
 
 
 @dataclass
