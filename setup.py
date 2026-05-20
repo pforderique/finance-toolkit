@@ -20,6 +20,7 @@ setuptools.setup(
         "selenium>=4.21.0",
         "webdriver-manager>=4.0.2",
         "beautifulsoup4>=4.12.0",
+        "pdfplumber>=0.10.0",
     ],
     extras_require={
         "dev": [
