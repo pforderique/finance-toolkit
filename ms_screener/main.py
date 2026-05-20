@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from ms_screener.src.config import RunConfig
 from ms_screener.src.logging_setup import configure_logging, console
-from ms_screener.src.workflow import run_workflow
+from ms_screener.src.workflow import run_workflow, run_scrape_only
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -42,6 +42,31 @@ def run(
         "--auto-headless/--auto-visible",
         help="Run the automation headless (default) or show the browser window",
     ),
+    scrape_individual: bool = typer.Option(
+        False,
+        "--scrape-individual/--no-scrape-individual",
+        help="Scrape individual Morningstar pages for Uncertainty and Ratings_Date (requires --auto)",
+    ),
+    scrape_max_stocks: int = typer.Option(
+        20,
+        "--scrape-max-stocks",
+        help="Maximum number of stocks to scrape per run (safety cap)",
+    ),
+    scrape_rate_limit: float = typer.Option(
+        3.0,
+        "--scrape-rate-limit",
+        help="Rate limit in seconds between individual page requests",
+    ),
+    scrape_tickers: Optional[str] = typer.Option(
+        None,
+        "--scrape-tickers",
+        help="Comma-separated list of tickers to scrape (skips staleness filter), e.g. AAPL,ADI,MSFT",
+    ),
+    scrape_only: bool = typer.Option(
+        False,
+        "--scrape-only/--no-scrape-only",
+        help="Skip CSV download and snapshot — just login and scrape individual pages",
+    ),
 ):
     """Run the Morningstar workflow end-to-end."""
     configure_logging(log_level)
@@ -58,10 +83,18 @@ def run(
         log_level=log_level.upper(),
         auto=auto,
         auto_headless=auto_headless,
+        scrape_individual=scrape_individual,
+        scrape_max_stocks=scrape_max_stocks,
+        scrape_rate_limit=scrape_rate_limit,
+        scrape_tickers=[t.strip().upper() for t in scrape_tickers.split(",")] if scrape_tickers else [],
+        scrape_only=scrape_only,
     )
 
     try:
-        run_workflow(cfg)
+        if cfg.scrape_only:
+            run_scrape_only(cfg)
+        else:
+            run_workflow(cfg)
     except RuntimeError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=2) from exc

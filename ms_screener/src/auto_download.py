@@ -40,9 +40,18 @@ class AutoDownloadError(RuntimeError):
     """Raised when automated download fails."""
 
 
-def download_compare_csvs(compare_links_path: Path, headless: bool = True) -> list[Path]:
+def download_compare_csvs(
+    compare_links_path: Path,
+    headless: bool = True,
+    driver: Optional[Chrome] = None,
+    download_dir: Optional[Path] = None,
+) -> list[Path]:
     """
     Download Morningstar CSV exports listed in compare_links_path into a temp directory.
+
+    If driver is provided, it must be an already-authenticated Chrome driver session
+    (caller owns lifecycle and must quit it). If driver is None, creates and manages
+    a new driver session. When driver is provided, download_dir must also be provided.
 
     Returns a list of CSV Paths in download order.
     """
@@ -53,35 +62,46 @@ def download_compare_csvs(compare_links_path: Path, headless: bool = True) -> li
             f"No compare links were found in {compare_links_path}. Generate links first."
         )
 
-    username = os.getenv("SPL_BARCODE")
-    pin = os.getenv("SPL_PIN")
-    if not username or not pin:
-        raise AutoDownloadError(
-            "SPL credentials missing. Set SPL_BARCODE and SPL_PIN in the environment or .env file."
-        )
+    if driver is not None and download_dir is None:
+        raise AutoDownloadError("download_dir must be provided when driver is provided")
 
-    download_dir = Path(tempfile.mkdtemp(prefix="ms_auto_", dir=None))
-    console.print(f"[cyan]• Auto download directory:[/cyan] {download_dir}")
+    if driver is None:
+        username = os.getenv("SPL_BARCODE")
+        pin = os.getenv("SPL_PIN")
+        if not username or not pin:
+            raise AutoDownloadError(
+                "SPL credentials missing. Set SPL_BARCODE and SPL_PIN in the environment or .env file."
+            )
 
+        download_dir = Path(tempfile.mkdtemp(prefix="ms_auto_", dir=None))
+        console.print(f"[cyan]• Auto download directory:[/cyan] {download_dir}")
+
+        with _managed_driver(download_dir, headless=headless) as d:
+            perform_login(d, username, pin)
+            return _do_downloads(d, links, download_dir)
+    else:
+        console.print(f"[cyan]• Auto download directory:[/cyan] {download_dir}")
+        return _do_downloads(driver, links, download_dir)
+
+
+def _do_downloads(driver: Chrome, links: list[str], download_dir: Path) -> list[Path]:
+    """Download all links using the provided driver and download directory."""
     downloaded: list[Path] = []
 
-    with _managed_driver(download_dir, headless=headless) as driver:
-        _perform_login(driver, username, pin)
+    for idx, link in enumerate(links, start=1):
+        console.print(f"[cyan]• Fetching link {idx}/{len(links)}[/cyan]")
+        driver.get(link)
+        _wait_for_page_ready(driver)
+        button = _locate_download_button(driver)
 
-        for idx, link in enumerate(links, start=1):
-            console.print(f"[cyan]• Fetching link {idx}/{len(links)}[/cyan]")
-            driver.get(link)
-            _wait_for_page_ready(driver)
-            button = _locate_download_button(driver)
+        before = _existing_csv_names(download_dir)
+        button.click()
+        new_file = _wait_for_new_csv(download_dir, before)
 
-            before = _existing_csv_names(download_dir)
-            button.click()
-            new_file = _wait_for_new_csv(download_dir, before)
-
-            target = download_dir / f"morningstar_compare_{idx:03d}.csv"
-            new_file.rename(target)
-            downloaded.append(target)
-            console.print(f"[green]  → Saved:[/green] {target}")
+        target = download_dir / f"morningstar_compare_{idx:03d}.csv"
+        new_file.rename(target)
+        downloaded.append(target)
+        console.print(f"[green]  → Saved:[/green] {target}")
 
     return downloaded
 
@@ -93,14 +113,14 @@ def _load_links(path: Path) -> list[str]:
 
 @contextmanager
 def _managed_driver(download_dir: Path, headless: bool) -> Iterator[Chrome]:
-    driver = _build_driver(download_dir, headless=headless)
+    driver = build_driver(download_dir, headless=headless)
     try:
         yield driver
     finally:
         driver.quit()
 
 
-def _build_driver(download_dir: Path, headless: bool) -> Chrome:
+def build_driver(download_dir: Path, headless: bool) -> Chrome:
     options = Options()
     prefs = {
         "download.default_directory": str(download_dir),
@@ -153,7 +173,7 @@ def _download_chromedriver() -> str:
         ) from exc
 
 
-def _perform_login(driver: Chrome, username: str, pin: str) -> None:
+def perform_login(driver: Chrome, username: str, pin: str) -> None:
     driver.get(LOGIN_URL)
     WebDriverWait(driver, PAGE_WAIT_SECONDS).until(
         EC.presence_of_element_located((By.CSS_SELECTOR, "form"))

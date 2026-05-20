@@ -9,6 +9,7 @@ logs/
 *.log
 build/
 **/out/
+ms_screener/artifacts/
 
 # QC specific files
 **/lean.json

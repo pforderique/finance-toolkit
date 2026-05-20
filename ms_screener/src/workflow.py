@@ -1,7 +1,9 @@
 """End-to-end workflow orchestration for the Morningstar screener tool."""
 
 import math
+import os
 import shlex
+import tempfile
 from pathlib import Path
 from typing import List
 
@@ -9,11 +11,51 @@ from rich.table import Table
 
 from ms_screener.src import analytics
 from ms_screener.src import auto_download
+from ms_screener.src import individual_scraper
 from ms_screener.src import io_layer
 from ms_screener.src import transform
-from ms_screener.src.datamodel import OutColumn
+from ms_screener.src.datamodel import InColumn, OutColumn
 from ms_screener.src.config import RunConfig, RunResult
 from ms_screener.src.logging_setup import console, print_header, print_warnings, timestamp, alert_fmv_change
+
+
+def _apply_scraped_to_collected(
+    cfg: RunConfig, collected: List[dict], updated_rows: List[dict]
+) -> None:
+    """Apply scraped Uncertainty/Ratings_Date to collected_data and update sheet."""
+    update_map = {r["ticker"]: r for r in updated_rows}
+    patched = []
+
+    for row in collected:
+        t = row.get(InColumn.TICKER)
+        if t in update_map:
+            row = dict(row)
+            row[InColumn.UNCERTAINTY] = update_map[t].get(
+                "uncertainty", row.get(InColumn.UNCERTAINTY)
+            )
+            row[InColumn.RATINGS_DATE] = update_map[t].get(
+                "ratings_date", row.get(InColumn.RATINGS_DATE)
+            )
+        patched.append(row)
+
+    try:
+        io_layer.update_sheet(
+            cfg.sheet_id,
+            cfg.data_tab,
+            patched,
+            headers=[
+                InColumn.TICKER,
+                InColumn.PERFORMANCE_ID,
+                InColumn.UNCERTAINTY,
+                InColumn.RATINGS_DATE,
+            ],
+        )
+        console.print(
+            f"[green]• Collected data updated:[/green]"
+            f" {cfg.data_tab} ({len(updated_rows)} rows)"
+        )
+    except RuntimeError as exc:
+        console.print(f"[yellow]Warning: collected_data update failed: {exc}[/yellow]")
 
 
 def _resolve_paths(raw_input_value: str) -> List[Path]:
@@ -70,6 +112,74 @@ def _resolve_paths(raw_input_value: str) -> List[Path]:
     return paths
 
 
+def run_scrape_only(cfg: RunConfig) -> None:
+    """Login and run individual page scraping only — no CSV download or snapshot update."""
+    print_header(f"[bold cyan]M* Scrape Only[/bold cyan]  •  {timestamp()}")
+    warnings: List[str] = []
+
+    console.rule("[bold]Read Collected Data[/bold]")
+    raw_collected, collected_warnings = io_layer.fetch_collected_data(
+        cfg.sheet_id, cfg.data_tab, cfg.data_dir)
+    collected, normalization_warnings = transform.normalize_collected_data(raw_collected)
+    warnings.extend(collected_warnings + normalization_warnings)
+
+    console.rule("[bold]Read Moat from Snapshot[/bold]")
+    try:
+        snapshot_rows = io_layer.read_sheet_as_dicts(cfg.sheet_id, cfg.snapshot_tab)
+        moat_by_ticker = {r.get(OutColumn.TICKER, ""): r.get(OutColumn.MOAT) for r in snapshot_rows}
+        console.print(f"[dim]• Moat loaded for {len(moat_by_ticker)} tickers from {cfg.snapshot_tab}[/dim]")
+    except Exception:
+        moat_by_ticker = {}
+        console.print("[yellow]Warning: could not read snapshot for moat data — defaulting to Tier 2[/yellow]")
+
+    stocks = [
+        {
+            "ticker": row[InColumn.TICKER],
+            "perf_id": row[InColumn.PERFORMANCE_ID],
+            "ratings_date": row.get(InColumn.RATINGS_DATE),
+            "uncertainty": row.get(InColumn.UNCERTAINTY),
+            "moat": moat_by_ticker.get(row[InColumn.TICKER]),
+        }
+        for row in collected
+        if row.get(InColumn.PERFORMANCE_ID)
+    ]
+
+    console.rule("[bold]Login[/bold]")
+    username = os.getenv("SPL_BARCODE")
+    pin = os.getenv("SPL_PIN")
+    if not username or not pin:
+        raise RuntimeError("SPL credentials missing: set SPL_BARCODE and SPL_PIN")
+
+    download_dir = Path(tempfile.mkdtemp(prefix="ms_scrape_"))
+    driver = auto_download.build_driver(download_dir, headless=cfg.auto_headless)
+    try:
+        auto_download.perform_login(driver, username, pin)
+
+        console.rule("[bold]Individual Page Scrape[/bold]")
+        scrape_result = individual_scraper.scrape_individual_pages(
+            driver, stocks,
+            max_stocks=cfg.scrape_max_stocks,
+            rate_limit_seconds=cfg.scrape_rate_limit,
+            download_dir=download_dir,
+            tickers=cfg.scrape_tickers or None,
+        )
+
+        if scrape_result.updated and cfg.sheet_id:
+            if not cfg.dry_run:
+                _apply_scraped_to_collected(cfg, collected, scrape_result.updated)
+            else:
+                console.print(
+                    f"[yellow]• [DRY RUN] Would update {len(scrape_result.updated)} rows"
+                    f" in {cfg.data_tab}[/yellow]"
+                )
+    except Exception as exc:
+        warnings.append(f"Scrape-only failed: {exc}")
+    finally:
+        driver.quit()
+
+    print_warnings(warnings)
+
+
 def run_workflow(cfg: RunConfig) -> RunResult:
     """Run the end-to-end Morningstar workflow based on the provided configuration."""
 
@@ -105,6 +215,10 @@ def run_workflow(cfg: RunConfig) -> RunResult:
                 f"=> [link={line.strip()}]Compare Link {idx + 1}[/link]")
 
     paths: List[Path]
+    scrape_result = None
+    driver = None
+    download_dir = None
+
     if cfg.files:
         paths = cfg.files
     elif cfg.folder:
@@ -117,8 +231,23 @@ def run_workflow(cfg: RunConfig) -> RunResult:
     elif cfg.auto:
         console.rule("[bold]Auto Download[/bold]")
         try:
-            paths = auto_download.download_compare_csvs(
-                links_path, headless=cfg.auto_headless)
+            if cfg.scrape_individual:
+                username = os.getenv("SPL_BARCODE")
+                pin = os.getenv("SPL_PIN")
+                if not username or not pin:
+                    raise RuntimeError("SPL credentials missing for individual scrape")
+
+                download_dir = Path(tempfile.mkdtemp(prefix="ms_auto_"))
+                driver = auto_download.build_driver(download_dir, headless=cfg.auto_headless)
+                try:
+                    auto_download.perform_login(driver, username, pin)
+                    paths = auto_download.download_compare_csvs(
+                        links_path, driver=driver, download_dir=download_dir)
+                except auto_download.AutoDownloadError as exc:
+                    raise RuntimeError(str(exc)) from exc
+            else:
+                paths = auto_download.download_compare_csvs(
+                    links_path, headless=cfg.auto_headless)
         except auto_download.AutoDownloadError as exc:
             raise RuntimeError(str(exc)) from exc
     else:
@@ -236,6 +365,44 @@ def run_workflow(cfg: RunConfig) -> RunResult:
     # Write local FMV changes CSV (overwrite is fine for local)
     if fmv_changes:
         io_layer.write_csv(fmv_changes_csv, fmv_changes, headers=transform.FMV_CHANGE_HEADERS)
+
+    # Individual page scraping (after all CSV/snapshot updates succeed)
+    if cfg.scrape_individual and driver:
+        console.rule("[bold]Individual Page Scrape[/bold]")
+        moat_by_ticker = {r[OutColumn.TICKER]: r[OutColumn.MOAT] for r in all_ms_rows}
+        stocks = [
+            {
+                "ticker": row[InColumn.TICKER],
+                "perf_id": row[InColumn.PERFORMANCE_ID],
+                "ratings_date": row.get(InColumn.RATINGS_DATE),
+                "uncertainty": row.get(InColumn.UNCERTAINTY),
+                "moat": moat_by_ticker.get(row[InColumn.TICKER]),
+            }
+            for row in collected
+            if row.get(InColumn.PERFORMANCE_ID)
+        ]
+        try:
+            scrape_result = individual_scraper.scrape_individual_pages(
+                driver, stocks,
+                max_stocks=cfg.scrape_max_stocks,
+                rate_limit_seconds=cfg.scrape_rate_limit,
+                download_dir=download_dir,
+                tickers=cfg.scrape_tickers or None,
+            )
+            if scrape_result.updated and cfg.sheet_id:
+                if not cfg.dry_run:
+                    _apply_scraped_to_collected(cfg, collected, scrape_result.updated)
+                else:
+                    console.print(
+                        f"[yellow]• [DRY RUN] Would update {len(scrape_result.updated)} rows"
+                        f" in {cfg.data_tab}[/yellow]"
+                    )
+        except Exception as exc:
+            warnings.append(f"Individual page scraping failed: {exc}")
+        finally:
+            if driver:
+                driver.quit()
+                driver = None
 
     print_warnings(warnings)
 
