@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from ms_screener.src.config import RunConfig
 from ms_screener.src.logging_setup import configure_logging, console
-from ms_screener.src.workflow import run_workflow
+from ms_screener.src.workflow import run_workflow, run_scrape_only
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -57,6 +57,16 @@ def run(
         "--scrape-rate-limit",
         help="Rate limit in seconds between individual page requests",
     ),
+    scrape_tickers: Optional[str] = typer.Option(
+        None,
+        "--scrape-tickers",
+        help="Comma-separated list of tickers to scrape (skips staleness filter), e.g. AAPL,ADI,MSFT",
+    ),
+    scrape_only: bool = typer.Option(
+        False,
+        "--scrape-only/--no-scrape-only",
+        help="Skip CSV download and snapshot — just login and scrape individual pages",
+    ),
 ):
     """Run the Morningstar workflow end-to-end."""
     configure_logging(log_level)
@@ -76,10 +86,15 @@ def run(
         scrape_individual=scrape_individual,
         scrape_max_stocks=scrape_max_stocks,
         scrape_rate_limit=scrape_rate_limit,
+        scrape_tickers=[t.strip().upper() for t in scrape_tickers.split(",")] if scrape_tickers else [],
+        scrape_only=scrape_only,
     )
 
     try:
-        run_workflow(cfg)
+        if cfg.scrape_only:
+            run_scrape_only(cfg)
+        else:
+            run_workflow(cfg)
     except RuntimeError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=2) from exc

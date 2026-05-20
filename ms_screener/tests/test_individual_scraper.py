@@ -2,12 +2,16 @@
 
 import pytest
 from datetime import datetime, timedelta
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from ms_screener.src.individual_scraper import (
     IndividualScrapeResult,
     _assign_tier,
     _is_stale,
     _filter_stale_stocks,
+    _parse_pdf_uncertainty,
+    _parse_pdf_ratings_date,
 )
 
 
@@ -160,3 +164,82 @@ class TestIndividualScrapeResult:
         assert len(result.skipped) == 1
         assert len(result.pending) == 1
         assert result.updated[0]["ticker"] == "AAPL"
+
+
+class TestPdfUncertaintyParsing:
+    """Test PDF uncertainty extraction."""
+
+    def test_extract_uncertainty_low(self):
+        """Extract 'Low' uncertainty from PDF text."""
+        text = "Some header\nUncertainty Level\nLow\nOther content"
+        assert _parse_pdf_uncertainty(text) == "Low"
+
+    def test_extract_uncertainty_high(self):
+        """Extract 'High' uncertainty from PDF text."""
+        text = "Analysis:\nUncertainty: High\nRating: 4"
+        assert _parse_pdf_uncertainty(text) == "High"
+
+    def test_extract_uncertainty_very_high(self):
+        """Extract 'Very High' uncertainty from PDF text."""
+        text = "Uncertainty\nVery High\nDetails..."
+        assert _parse_pdf_uncertainty(text) == "Very High"
+
+    def test_no_uncertainty_found(self):
+        """Return None if no uncertainty in text."""
+        text = "Some content without uncertainty"
+        assert _parse_pdf_uncertainty(text) is None
+
+    def test_extract_uncertainty_case_insensitive(self):
+        """Uncertainty extraction is case-insensitive."""
+        text = "UNCERTAINTY\nmedium\nMore content"
+        assert _parse_pdf_uncertainty(text) == "medium"
+
+
+class TestPdfDateParsing:
+    """Test PDF ratings date extraction — Analyst Note date is the primary source."""
+
+    def test_analyst_note_is_primary(self):
+        """Analyst Note date from Contents table takes priority over FMV date."""
+        text = "Contents\nAnalyst Note (6 May 2026)\nFair Value as of 23 Jul 2024 02:56, UTC"
+        assert _parse_pdf_ratings_date(text) == "2026-05-06"
+
+    def test_analyst_note_european_format(self):
+        """Analyst Note with day-first format."""
+        text = "Analyst Note (4 May 2026)\nBusiness Description"
+        assert _parse_pdf_ratings_date(text) == "2026-05-04"
+
+    def test_fair_value_fallback(self):
+        """Fall back to Fair Value as of when no Analyst Note present (quant reports)."""
+        text = "Fair Value as of 30 Apr 2026 10:09, UTC"
+        assert _parse_pdf_ratings_date(text) == "2026-04-30"
+
+    def test_ignores_report_generation_date(self):
+        """Report generation date in header must NOT be returned."""
+        text = "Report as of 19 May 2026 05:46, UTC\nAnalyst Note (19 Feb 2026)"
+        assert _parse_pdf_ratings_date(text) == "2026-02-19"
+
+    def test_valuation_as_of_fallback(self):
+        """Valuation as of paragraph form used by some stocks."""
+        text = "Valuation as of 18 May 2026\nMore analysis..."
+        assert _parse_pdf_ratings_date(text) == "2026-05-18"
+
+    def test_no_date_found(self):
+        """Return None if no recognisable date pattern in text."""
+        text = "Some content without any date"
+        assert _parse_pdf_ratings_date(text) is None
+
+    def test_business_strategy_section_beats_old_fmv_footnote(self):
+        """Business Strategy & Outlook Contents entry wins over old FMV chart footnote."""
+        text = (
+            "Fair Value as of 3 Feb 2026 20:13, UTC.\n"
+            "Business Strategy & Outlook (15 May 2026)\n"
+        )
+        assert _parse_pdf_ratings_date(text) == "2026-05-15"
+
+    def test_fair_value_latest_wins_over_chart_footnote(self):
+        """When only Fair Value as of present, latest date wins over old chart footnote."""
+        text = (
+            "Fair Value as of 3 Feb 2026 20:13, UTC.\n"
+            "Fair Value as of 16 May 2026 02:05, UTC\n"
+        )
+        assert _parse_pdf_ratings_date(text) == "2026-05-16"

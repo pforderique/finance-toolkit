@@ -36,6 +36,8 @@ class RunConfig:
     scrape_individual: bool = False
     scrape_max_stocks: int = 20
     scrape_rate_limit: float = 3.0
+    scrape_tickers: List[str] = field(default_factory=list)
+    scrape_only: bool = False
 
 
 @dataclass
