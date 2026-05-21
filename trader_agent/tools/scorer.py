@@ -263,7 +263,7 @@ def score_all(rows: list[dict]) -> list[ScoredStock]:
 if __name__ == "__main__":
     from trader_agent.tools.loader import load_screener
 
-    sheet_id = os.environ["GOOGLE_SHEET_ID"]
+    sheet_id = os.environ["SHEET_ID"]
     rows = load_screener(sheet_id)
     scored = score_all(rows)
     json.dump([asdict(s) for s in scored], sys.stdout, indent=2, default=str)

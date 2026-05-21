@@ -1,38 +1,57 @@
 # Finance Toolkit
 
-A set of financial tools and research studies to aid in portfolio management,
-stock screening, and trading strategies.
+Personal investment tools: stock screening, portfolio sync, and buy-signal analysis.
 
-### [Screener](./screener/README.md)
+## Tools
 
-A stock screener tool to fetch and store Moriningstar data. Contains:
-* **update_stocks.py**: utility & script to monitor daily price changes and
-ratings update. Can send alert emails with actions per stock.
-* **terminal UI:** for quickly screening stocks based on their fair market
-value, discount/premium, and ratings.
+| Package | What it does |
+|---|---|
+| `ms_screener` | Fetches Morningstar data into Google Sheets (Selenium + Sheets API) |
+| `fidelity` | Syncs a Fidelity CSV export into the Portfolio Tracker sheet |
+| `trader_agent` | Buy-signal analyst — scored morning briefs via Claude Code |
 
-## Installation
-Using a virtual environment is reccommended. This is a pip installable python
-package that will install needed dependencies accross all tools.
+## Setup
+
+Requires [uv](https://docs.astral.sh/uv/).
+
 ```bash
-# Use a virtual environment
-python -m venv ~/envs/screener
-source ~/envs/screener/bin/activate
+# Install all packages + dev deps
+uv sync --all-packages
 
-# Install the finance-toolkit package
-pip install -e .
+# Copy and fill in the env file
+cp .env.example .env  # or edit .env directly
 ```
 
-## Contributing
-Install dev dependencies with 
+### Environment variables (`.env` at repo root)
+
+| Variable | Used by | Description |
+|---|---|---|
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | all | Path to GCP service account JSON |
+| `SHEET_ID` | ms_screener, trader_agent | Morningstar Screener Google Sheet ID |
+| `FIDELITY_SHEET_ID` | fidelity | Portfolio Tracker Google Sheet ID |
+| `MORNINGSTAR_API_KEYS` | ms_screener | Comma-separated RapidAPI keys |
+| `EMAIL_USERNAME` / `EMAIL_PASSWORD` | ms_screener | Alert email credentials |
+| `ALERT_EMAILS` | ms_screener | Comma-separated recipient addresses |
+| `SPL_BARCODE` / `SPL_PIN` | ms_screener | Seattle Public Library card (Morningstar access) |
+
+## Usage
+
 ```bash
-pip install -e .'[dev]'
+# Morning brief (via Claude Code)
+# Say "morning brief" or "tell me which stocks to buy" in a Claude Code session
+# from this directory — it reads trader_agent/CLAUDE.md and drives the tools.
+
+# Run ms_screener manually
+uv run python -m ms_screener.main --help
+
+# Sync Fidelity portfolio
+uv run python -m fidelity.main positions.csv
+
+# Run tests
+uv run pytest
 ```
-and run tests using `pytest` at the root. To run simple coverage for a package like screener, 
-```bash
-pytest --cov=screener --cov-report=term-missing
-```
-or directly use `coverage` to generate an html report:
-```
-coverage run -m pytest && coverage html && open htmlcov/index.html
-```
+
+## Scheduled jobs
+
+`ms_screener` runs automatically weekdays at 7:05 AM via macOS LaunchAgent.
+See [MS_SCREENER_LAUNCHD.md](./MS_SCREENER_LAUNCHD.md).

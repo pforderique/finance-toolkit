@@ -7,13 +7,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import Resource
 from googleapiclient.discovery import build
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 

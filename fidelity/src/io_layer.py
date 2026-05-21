@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import Resource
 from googleapiclient.discovery import build
@@ -16,7 +16,7 @@ from googleapiclient.discovery import build
 from fidelity.src import constants
 from fidelity.src.datamodel import SheetRow, TableState
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 _HYPERLINK_PATTERN = re.compile(r'=HYPERLINK\(".*?",\s*"(.*?)"\)', re.IGNORECASE)

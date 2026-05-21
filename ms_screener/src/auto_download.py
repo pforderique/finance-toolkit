@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional, Tuple
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
@@ -22,7 +22,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from ms_screener.src.logging_setup import console
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 LOGIN_URL = "https://ezproxy.spl.org/login?url=https://research.morningstar.com/ic/ip-sign-in"
 DOWNLOAD_WAIT_SECONDS = 90
