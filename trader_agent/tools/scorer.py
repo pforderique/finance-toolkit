@@ -136,11 +136,11 @@ class ScoredStock:
 
 
 def conviction_tier(score: float) -> str:
-    if score <= 0.60:
+    if score <= 0.50:
         return "STRONG BUY"
-    if score <= 0.72:
+    if score <= 0.65:
         return "BUY"
-    if score <= 0.80:
+    if score <= 0.75:
         return "WATCH"
     return "SKIP"
 

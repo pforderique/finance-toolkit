@@ -87,25 +87,25 @@ class TestPassesPrefilter:
 
 class TestConvictionTier:
     def test_strong_buy(self):
-        assert conviction_tier(0.55) == "STRONG BUY"
+        assert conviction_tier(0.45) == "STRONG BUY"
 
     def test_buy(self):
-        assert conviction_tier(0.65) == "BUY"
+        assert conviction_tier(0.55) == "BUY"
 
     def test_watch(self):
-        assert conviction_tier(0.79) == "WATCH"
+        assert conviction_tier(0.70) == "WATCH"
 
     def test_skip(self):
-        assert conviction_tier(0.85) == "SKIP"
+        assert conviction_tier(0.80) == "SKIP"
 
     def test_boundary_strong_buy(self):
-        assert conviction_tier(0.60) == "STRONG BUY"
+        assert conviction_tier(0.50) == "STRONG BUY"
 
     def test_boundary_buy(self):
-        assert conviction_tier(0.72) == "BUY"
+        assert conviction_tier(0.65) == "BUY"
 
     def test_boundary_watch(self):
-        assert conviction_tier(0.80) == "WATCH"
+        assert conviction_tier(0.75) == "WATCH"
 
 
 class TestParseStars:

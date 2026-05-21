@@ -15,9 +15,9 @@ Run:
   python -m trader_agent.tools.scorer
 
 Parse JSON output. Separate into:
-  - strong_buys:  conviction == "STRONG BUY"
-  - buys:         conviction == "BUY"
-  - watches:      conviction == "WATCH"  (show only if strong_buys + buys < 5)
+  - strong_buys:  conviction == "STRONG BUY"  (score ≤ 0.50)
+  - buys:         conviction == "BUY"          (score ≤ 0.65)
+  - watches:      conviction == "WATCH"        (score ≤ 0.75, show only if strong_buys + buys < 5)
   - skipped:      conviction == "SKIP"   (do not show, just count)
 
 ### 2. Load FMV signals
