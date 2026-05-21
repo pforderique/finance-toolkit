@@ -27,11 +27,11 @@ STALE_200 = _days_ago(200)
 class TestBuyScore:
     def test_wide_low_fresh(self):
         result = buy_score(0.77, "Wide", "Low", FRESH)
-        assert result == pytest.approx((1 - 0.77) * 1.0 * 1.0 * 1.0)
+        assert result == pytest.approx(min((1 - 0.77) / 0.5, 1.0) * 1.0 * 1.0 * 1.0)
 
     def test_narrow_medium_fresh(self):
         result = buy_score(0.85, "Narrow", "Medium", FRESH)
-        assert result == pytest.approx((1 - 0.85) * 0.85 * 0.85 * 1.0)
+        assert result == pytest.approx(min((1 - 0.85) / 0.5, 1.0) * 0.85 * 0.85 * 1.0)
 
     def test_none_discount(self):
         assert buy_score(None, "Wide", "Low", FRESH) is None
@@ -87,25 +87,25 @@ class TestPassesPrefilter:
 
 class TestConvictionTier:
     def test_strong_buy(self):
-        assert conviction_tier(0.35) == "STRONG BUY"
+        assert conviction_tier(0.70) == "STRONG BUY"
 
     def test_buy(self):
-        assert conviction_tier(0.18) == "BUY"
+        assert conviction_tier(0.40) == "BUY"
 
     def test_watch(self):
-        assert conviction_tier(0.09) == "WATCH"
+        assert conviction_tier(0.20) == "WATCH"
 
     def test_skip(self):
-        assert conviction_tier(0.05) == "SKIP"
+        assert conviction_tier(0.10) == "SKIP"
 
     def test_boundary_strong_buy(self):
-        assert conviction_tier(0.25) == "STRONG BUY"
+        assert conviction_tier(0.50) == "STRONG BUY"
 
     def test_boundary_buy(self):
-        assert conviction_tier(0.12) == "BUY"
+        assert conviction_tier(0.30) == "BUY"
 
     def test_boundary_watch(self):
-        assert conviction_tier(0.07) == "WATCH"
+        assert conviction_tier(0.15) == "WATCH"
 
 
 class TestParseStars:

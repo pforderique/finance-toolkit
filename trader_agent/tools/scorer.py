@@ -60,7 +60,8 @@ def buy_score(
     if mw is None or uw is None:
         return None
     fw = freshness_weight(ratings_date)
-    return (1 - discount) * mw * uw * fw
+    discount_component = min((1 - discount) / 0.5, 1.0)
+    return discount_component * mw * uw * fw
 
 
 def passes_prefilter(row: dict) -> tuple[bool, str | None]:
@@ -136,11 +137,11 @@ class ScoredStock:
 
 
 def conviction_tier(score: float) -> str:
-    if score >= 0.25:
+    if score >= 0.50:
         return "STRONG BUY"
-    if score >= 0.12:
+    if score >= 0.30:
         return "BUY"
-    if score >= 0.07:
+    if score >= 0.15:
         return "WATCH"
     return "SKIP"
 
