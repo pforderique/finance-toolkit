@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fidelity"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "google-api-python-client>=2.100.0",
+    "python-dotenv>=1.1.0",
+    "typer>=0.9.0",
+    "rich>=13.5.2",
+]
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["fidelity*"]
