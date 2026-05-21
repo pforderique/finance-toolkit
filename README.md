@@ -16,7 +16,7 @@ Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
 # Install all packages + dev deps
-uv sync --all-packages
+uv sync
 
 # Copy and fill in the env file
 cp .env.example .env  # or edit .env directly
