@@ -245,6 +245,8 @@ def score_all(rows: list[dict]) -> list[ScoredStock]:
             continue
 
         conv = conviction_tier(score)
+        if conv == "STRONG BUY" and stale:
+            conv = "BUY"
         hint = sizing_hint(conv, moat, uncertainty)
 
         results.append(ScoredStock(
