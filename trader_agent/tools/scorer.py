@@ -60,7 +60,7 @@ def buy_score(
     if mw is None or uw is None:
         return None
     fw = freshness_weight(ratings_date)
-    return discount * mw * uw * fw
+    return (1 - discount) * mw * uw * fw
 
 
 def passes_prefilter(row: dict) -> tuple[bool, str | None]:
@@ -136,11 +136,11 @@ class ScoredStock:
 
 
 def conviction_tier(score: float) -> str:
-    if score <= 0.50:
+    if score >= 0.25:
         return "STRONG BUY"
-    if score <= 0.65:
+    if score >= 0.12:
         return "BUY"
-    if score <= 0.75:
+    if score >= 0.07:
         return "WATCH"
     return "SKIP"
 
@@ -246,7 +246,7 @@ def score_all(rows: list[dict]) -> list[ScoredStock]:
 
         conv = conviction_tier(score)
         if conv == "STRONG BUY" and stale:
-            conv = "BUY"
+            conv = "BUY"  # fresh data required for highest conviction
         hint = sizing_hint(conv, moat, uncertainty)
 
         results.append(ScoredStock(
@@ -270,7 +270,7 @@ def score_all(rows: list[dict]) -> list[ScoredStock]:
             filter_reason=None,
         ))
 
-    results.sort(key=lambda s: (s.buy_score is None, s.buy_score or 9999))
+    results.sort(key=lambda s: (s.buy_score is None, -(s.buy_score or 0)))
     return results
 
 
