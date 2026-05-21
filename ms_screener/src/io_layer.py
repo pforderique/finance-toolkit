@@ -3,6 +3,7 @@
 import csv
 import json
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
@@ -104,9 +105,6 @@ def read_collected_data_from_sheets(sheet_id: str, tab: str) -> List[dict]:
         "ticker": "Ticker",
         "perf_id": "Performance_ID",
         "performance_id": "Performance_ID",
-        "uncertainty": "Uncertainty",
-        "rating_last_updated": "Ratings_Date",
-        "ratings_date": "Ratings_Date",
     }
 
     headers: List[str] = []
@@ -358,3 +356,77 @@ def append_to_sheet(sheet_id: str, tab: str, rows: List[dict], headers: Optional
         if error_message:
             raise RuntimeError(f"{base_message} (Google error: {error_message})") from exc
         raise RuntimeError(base_message) from exc
+
+
+def _col_letter(idx: int) -> str:
+    """Convert 0-based column index to A1 column letter (A, B, ..., Z, AA, ...)."""
+    result = ""
+    n = idx + 1
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        result = chr(65 + rem) + result
+    return result
+
+
+def patch_screener_rows(
+    sheet_id: str,
+    tab: str,
+    updates: List[dict],
+    ticker_col: str = "ticker",
+) -> int:
+    """Update specific columns for matched ticker rows in the Screener tab.
+
+    Each dict in `updates` must have `ticker_col` plus the columns to patch.
+    Returns number of cells updated.
+    """
+    service = _get_sheets_service()
+    range_name = f"{tab}!A1:Z"
+
+    response = (
+        service.spreadsheets()
+        .values()
+        .get(spreadsheetId=sheet_id, range=range_name)
+        .execute()
+    )
+    values = response.get("values", [])
+    if not values:
+        return 0
+
+    headers = [h.strip() for h in values[0]]
+    if ticker_col not in headers:
+        return 0
+
+    ticker_idx = headers.index(ticker_col)
+    update_map = {u[ticker_col].upper(): u for u in updates if u.get(ticker_col)}
+
+    data = []
+    for row_idx, row in enumerate(values[1:], start=2):
+        raw = row[ticker_idx] if ticker_idx < len(row) else ""
+        # Screener tab ticker may be a HYPERLINK formula — extract display text
+        m = re.search(r'HYPERLINK\([^,]+,\s*"([^"]+)"\)', raw, re.IGNORECASE)
+        ticker = m.group(1).strip().upper() if m else raw.strip().upper()
+
+        if ticker not in update_map:
+            continue
+
+        for col_name, col_value in update_map[ticker].items():
+            if col_name == ticker_col or col_name not in headers:
+                continue
+            col_idx = headers.index(col_name)
+            data.append({
+                "range": f"{tab}!{_col_letter(col_idx)}{row_idx}",
+                "values": [[_format_sheet_value(col_value)]],
+            })
+
+    if not data:
+        return 0
+
+    try:
+        service.spreadsheets().values().batchUpdate(
+            spreadsheetId=sheet_id,
+            body={"valueInputOption": "USER_ENTERED", "data": data},
+        ).execute()
+    except Exception as exc:
+        raise RuntimeError(f"Failed to patch {tab} tab: {exc}") from exc
+
+    return len(data)
