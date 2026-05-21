@@ -44,8 +44,6 @@ def normalize_collected_data(rows: Iterable[dict]) -> tuple[list[dict], list[str
     for row in rows:
         ticker = row.get(InColumn.TICKER, "").strip().upper()
         perf = row.get(InColumn.PERFORMANCE_ID, "").strip().upper()
-        date_iso = coerce_date(row.get(InColumn.RATINGS_DATE, ""))
-        uncertainty = row.get(InColumn.UNCERTAINTY, "").strip().title()
 
         if not ticker:
             warnings.append("Row with missing ticker skipped.")
@@ -66,8 +64,6 @@ def normalize_collected_data(rows: Iterable[dict]) -> tuple[list[dict], list[str
             {
                 InColumn.TICKER: ticker,
                 InColumn.PERFORMANCE_ID: perf,
-                InColumn.RATINGS_DATE: date_iso,
-                InColumn.UNCERTAINTY: uncertainty,
             }
         )
 
@@ -265,16 +261,7 @@ def merge_dedupe(rows: list[dict]) -> list[dict]:
             by_ticker[ticker] = row
             continue
 
-        new_date = row.get(InColumn.RATINGS_DATE)
-        old_date = prior.get(InColumn.RATINGS_DATE)
-        if new_date and old_date:
-            if new_date > old_date:
-                by_ticker[ticker] = row
-            elif new_date == old_date and mtime >= file_mtime.get(ticker, 0.0):
-                by_ticker[ticker] = row
-        elif new_date and not old_date:
-            by_ticker[ticker] = row
-        elif not new_date and not old_date and mtime >= file_mtime.get(ticker, 0.0):
+        if mtime >= file_mtime.get(ticker, 0.0):
             by_ticker[ticker] = row
 
     return list(by_ticker.values())
@@ -315,7 +302,7 @@ def diff_snapshots(prev_rows: list[dict], curr_rows: list[dict]) -> list[dict]:
         if not perf or perf not in prior:
             continue
         baseline = prior[perf]
-        fields = ("stars", "fair_value", "moat", InColumn.RATINGS_DATE)
+        fields = ("stars", "fair_value", "moat", OutColumn.RATINGS_DATE)
         deltas = {field: (baseline.get(field), row.get(field))
                   for field in fields if baseline.get(field) != row.get(field)}
         if deltas:
@@ -382,10 +369,7 @@ def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> 
                     OutColumn.STARS.title())
             ),
             "current_stars": coerce_int(row.get(OutColumn.STARS)),
-            "previous_rating_date": (
-                prev_row.get(InColumn.RATINGS_DATE) or prev_row.get(
-                    InColumn.RATINGS_DATE.title())
-            ),
+            "previous_rating_date": prev_row.get(OutColumn.RATINGS_DATE),
             "current_rating_date": today_iso,
         }
         changes.append(change_row)

@@ -19,45 +19,6 @@ from ms_screener.src.config import RunConfig, RunResult
 from ms_screener.src.logging_setup import console, print_header, print_warnings, timestamp, alert_fmv_change
 
 
-def _apply_scraped_to_collected(
-    cfg: RunConfig, collected: List[dict], updated_rows: List[dict]
-) -> None:
-    """Apply scraped Uncertainty/Ratings_Date to collected_data and update sheet."""
-    update_map = {r["ticker"]: r for r in updated_rows}
-    patched = []
-
-    for row in collected:
-        t = row.get(InColumn.TICKER)
-        if t in update_map:
-            row = dict(row)
-            row[InColumn.UNCERTAINTY] = update_map[t].get(
-                "uncertainty", row.get(InColumn.UNCERTAINTY)
-            )
-            row[InColumn.RATINGS_DATE] = update_map[t].get(
-                "ratings_date", row.get(InColumn.RATINGS_DATE)
-            )
-        patched.append(row)
-
-    try:
-        io_layer.update_sheet(
-            cfg.sheet_id,
-            cfg.data_tab,
-            patched,
-            headers=[
-                InColumn.TICKER,
-                InColumn.PERFORMANCE_ID,
-                InColumn.UNCERTAINTY,
-                InColumn.RATINGS_DATE,
-            ],
-        )
-        console.print(
-            f"[green]• Collected data updated:[/green]"
-            f" {cfg.data_tab} ({len(updated_rows)} rows)"
-        )
-    except RuntimeError as exc:
-        console.print(f"[yellow]Warning: collected_data update failed: {exc}[/yellow]")
-
-
 def _resolve_paths(raw_input_value: str) -> List[Path]:
     if not raw_input_value:
         console.print(
@@ -123,22 +84,24 @@ def run_scrape_only(cfg: RunConfig) -> None:
     collected, normalization_warnings = transform.normalize_collected_data(raw_collected)
     warnings.extend(collected_warnings + normalization_warnings)
 
-    console.rule("[bold]Read Moat from Snapshot[/bold]")
+    console.rule("[bold]Read Screener Tab[/bold]")
     try:
-        snapshot_rows = io_layer.read_sheet_as_dicts(cfg.sheet_id, cfg.snapshot_tab)
-        moat_by_ticker = {r.get(OutColumn.TICKER, ""): r.get(OutColumn.MOAT) for r in snapshot_rows}
-        console.print(f"[dim]• Moat loaded for {len(moat_by_ticker)} tickers from {cfg.snapshot_tab}[/dim]")
+        screener_rows = io_layer.read_sheet_as_dicts(cfg.sheet_id, cfg.snapshot_tab)
+        screener_by_ticker = {
+            (r.get(OutColumn.TICKER) or "").upper(): r for r in screener_rows
+        }
+        console.print(f"[dim]• Screener loaded for {len(screener_by_ticker)} tickers[/dim]")
     except Exception:
-        moat_by_ticker = {}
-        console.print("[yellow]Warning: could not read snapshot for moat data — defaulting to Tier 2[/yellow]")
+        screener_by_ticker = {}
+        console.print("[yellow]Warning: could not read Screener tab — staleness checks degraded[/yellow]")
 
     stocks = [
         {
             "ticker": row[InColumn.TICKER],
             "perf_id": row[InColumn.PERFORMANCE_ID],
-            "ratings_date": row.get(InColumn.RATINGS_DATE),
-            "uncertainty": row.get(InColumn.UNCERTAINTY),
-            "moat": moat_by_ticker.get(row[InColumn.TICKER]),
+            "ratings_date": screener_by_ticker.get(row[InColumn.TICKER], {}).get(OutColumn.RATINGS_DATE),
+            "uncertainty": screener_by_ticker.get(row[InColumn.TICKER], {}).get(OutColumn.UNCERTAINTY),
+            "moat": screener_by_ticker.get(row[InColumn.TICKER], {}).get(OutColumn.MOAT),
         }
         for row in collected
         if row.get(InColumn.PERFORMANCE_ID)
@@ -166,11 +129,14 @@ def run_scrape_only(cfg: RunConfig) -> None:
 
         if scrape_result.updated and cfg.sheet_id:
             if not cfg.dry_run:
-                _apply_scraped_to_collected(cfg, collected, scrape_result.updated)
+                patched = io_layer.patch_screener_rows(
+                    cfg.sheet_id, cfg.snapshot_tab, scrape_result.updated)
+                console.print(
+                    f"[green]• Screener tab patched:[/green] {patched} cell(s) updated")
             else:
                 console.print(
-                    f"[yellow]• [DRY RUN] Would update {len(scrape_result.updated)} rows"
-                    f" in {cfg.data_tab}[/yellow]"
+                    f"[yellow]• [DRY RUN] Would patch {len(scrape_result.updated)} rows"
+                    f" in {cfg.snapshot_tab}[/yellow]"
                 )
     except Exception as exc:
         warnings.append(f"Scrape-only failed: {exc}")
@@ -287,6 +253,16 @@ def run_workflow(cfg: RunConfig) -> RunResult:
     except Exception:
         prev_snapshot = []
 
+    # Preserve scraped uncertainty/ratings_date from previous run into new snapshot rows
+    prev_by_ticker = {(r.get(OutColumn.TICKER) or "").upper(): r for r in prev_snapshot}
+    for row in snapshot:
+        ticker = (row.get(OutColumn.TICKER) or "").upper()
+        prev = prev_by_ticker.get(ticker, {})
+        if not row.get(OutColumn.UNCERTAINTY):
+            row[OutColumn.UNCERTAINTY] = prev.get(OutColumn.UNCERTAINTY) or None
+        if not row.get(OutColumn.RATINGS_DATE):
+            row[OutColumn.RATINGS_DATE] = prev.get(OutColumn.RATINGS_DATE) or None
+
     # Detect changes in fair value
     fmv_changes = transform.detect_fmv_changes(prev_snapshot, snapshot)
 
@@ -366,41 +342,59 @@ def run_workflow(cfg: RunConfig) -> RunResult:
     if fmv_changes:
         io_layer.write_csv(fmv_changes_csv, fmv_changes, headers=transform.FMV_CHANGE_HEADERS)
 
-    # Individual page scraping (after all CSV/snapshot updates succeed)
-    if cfg.scrape_individual and driver:
-        console.rule("[bold]Individual Page Scrape[/bold]")
-        moat_by_ticker = {r[OutColumn.TICKER]: r[OutColumn.MOAT] for r in all_ms_rows}
-        stocks = [
-            {
-                "ticker": row[InColumn.TICKER],
-                "perf_id": row[InColumn.PERFORMANCE_ID],
-                "ratings_date": row.get(InColumn.RATINGS_DATE),
-                "uncertainty": row.get(InColumn.UNCERTAINTY),
-                "moat": moat_by_ticker.get(row[InColumn.TICKER]),
-            }
-            for row in collected
-            if row.get(InColumn.PERFORMANCE_ID)
-        ]
-        try:
-            scrape_result = individual_scraper.scrape_individual_pages(
-                driver, stocks,
-                max_stocks=cfg.scrape_max_stocks,
-                rate_limit_seconds=cfg.scrape_rate_limit,
-                download_dir=download_dir,
-                tickers=cfg.scrape_tickers or None,
-            )
-            if scrape_result.updated and cfg.sheet_id:
-                if not cfg.dry_run:
-                    _apply_scraped_to_collected(cfg, collected, scrape_result.updated)
-                else:
-                    console.print(
-                        f"[yellow]• [DRY RUN] Would update {len(scrape_result.updated)} rows"
-                        f" in {cfg.data_tab}[/yellow]"
-                    )
-        except Exception as exc:
-            warnings.append(f"Individual page scraping failed: {exc}")
-        finally:
-            if driver:
+    # Individual page scraping (auto-triggers after batch when cfg.scrape_individual)
+    if cfg.scrape_individual:
+        # Create driver if not already open (e.g. --files/--folder mode)
+        if driver is None:
+            username = os.getenv("SPL_BARCODE")
+            pin = os.getenv("SPL_PIN")
+            if not username or not pin:
+                warnings.append("SPL credentials missing — individual scrape skipped")
+            else:
+                download_dir = Path(tempfile.mkdtemp(prefix="ms_scrape_"))
+                driver = auto_download.build_driver(download_dir, headless=cfg.auto_headless)
+                try:
+                    auto_download.perform_login(driver, username, pin)
+                except Exception as exc:
+                    warnings.append(f"Login failed for individual scrape: {exc}")
+                    driver.quit()
+                    driver = None
+
+        if driver:
+            console.rule("[bold]Individual Page Scrape[/bold]")
+            stocks = [
+                {
+                    "ticker": row[InColumn.TICKER],
+                    "perf_id": row[InColumn.PERFORMANCE_ID],
+                    "ratings_date": prev_by_ticker.get(row[InColumn.TICKER], {}).get(OutColumn.RATINGS_DATE),
+                    "uncertainty": prev_by_ticker.get(row[InColumn.TICKER], {}).get(OutColumn.UNCERTAINTY),
+                    "moat": prev_by_ticker.get(row[InColumn.TICKER], {}).get(OutColumn.MOAT),
+                }
+                for row in collected
+                if row.get(InColumn.PERFORMANCE_ID)
+            ]
+            try:
+                scrape_result = individual_scraper.scrape_individual_pages(
+                    driver, stocks,
+                    max_stocks=cfg.scrape_max_stocks,
+                    rate_limit_seconds=cfg.scrape_rate_limit,
+                    download_dir=download_dir,
+                    tickers=cfg.scrape_tickers or None,
+                )
+                if scrape_result.updated and cfg.sheet_id:
+                    if not cfg.dry_run:
+                        patched = io_layer.patch_screener_rows(
+                            cfg.sheet_id, cfg.snapshot_tab, scrape_result.updated)
+                        console.print(
+                            f"[green]• Screener tab patched:[/green] {patched} cell(s) updated")
+                    else:
+                        console.print(
+                            f"[yellow]• [DRY RUN] Would patch {len(scrape_result.updated)} rows"
+                            f" in {cfg.snapshot_tab}[/yellow]"
+                        )
+            except Exception as exc:
+                warnings.append(f"Individual page scraping failed: {exc}")
+            finally:
                 driver.quit()
                 driver = None
 

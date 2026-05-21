@@ -16,10 +16,10 @@ SNAPSHOT_HEADERS = [
     OutColumn.LAST_PRICE,
     OutColumn.FAIR_VALUE,
     OutColumn.DISCOUNT,
-    InColumn.UNCERTAINTY,
+    OutColumn.UNCERTAINTY,
     OutColumn.MOAT,
     OutColumn.STARS,
-    InColumn.RATINGS_DATE,
+    OutColumn.RATINGS_DATE,
     OutColumn.LAST_SCRAPED,
     # OutColumn.IS_QUANT,
 ]
@@ -51,10 +51,10 @@ def build_snapshot(full_rows: List[dict]) -> List[dict]:
             OutColumn.LAST_PRICE: price,
             OutColumn.FAIR_VALUE: row.get(OutColumn.FAIR_VALUE),
             OutColumn.DISCOUNT: discount(price, row.get(OutColumn.FAIR_VALUE)),
-            InColumn.UNCERTAINTY: row.get(InColumn.UNCERTAINTY),
+            OutColumn.UNCERTAINTY: row.get(OutColumn.UNCERTAINTY),
             OutColumn.MOAT: row.get(OutColumn.MOAT),
             OutColumn.STARS: row.get(OutColumn.STARS),
-            InColumn.RATINGS_DATE: row.get(InColumn.RATINGS_DATE),
+            OutColumn.RATINGS_DATE: row.get(OutColumn.RATINGS_DATE),
             # OutColumn.IS_QUANT: row.get(OutColumn.IS_QUANT),
             OutColumn.LAST_SCRAPED: date.today().isoformat()
         }

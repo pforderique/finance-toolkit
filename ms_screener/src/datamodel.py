@@ -7,8 +7,6 @@ class InColumn(str, Enum):
     """Columns in the collected data Google Sheet."""
     TICKER = "Ticker"
     PERFORMANCE_ID = "Performance_ID"
-    UNCERTAINTY = "Uncertainty"
-    RATINGS_DATE = "Ratings_Date"
 
 
 # No Edits.
@@ -39,6 +37,8 @@ class OutColumn(str, Enum):
     LAST_SCRAPED = "last_scraped"
     IS_QUANT = "is_quant"
     SOURCE_FILE = "source_file"
+    UNCERTAINTY = "uncertainty"
+    RATINGS_DATE = "ratings_date"
 
     def computed(self) -> bool:
         """Whether this column is computed (not directly from input)."""
