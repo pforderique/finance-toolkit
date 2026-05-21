@@ -23,10 +23,12 @@ def _make_fmv_row(ticker: str, days_ago: int, old_fmv: float, new_fmv: float) ->
 
 
 def _make_stock(ticker: str, ratings_age: int | None = 30, fmv_upgraded: bool = False) -> ScoredStock:
+    stale = ratings_age is None or ratings_age > 180
     return ScoredStock(
         ticker=ticker,
         company="Test Co",
         discount=0.75,
+        discount_pct=0.25,
         fair_value=100.0,
         last_price=75.0,
         moat="Wide",
@@ -34,11 +36,9 @@ def _make_stock(ticker: str, ratings_age: int | None = 30, fmv_upgraded: bool = 
         stars=4,
         ratings_date=_days_ago(ratings_age) if ratings_age else None,
         ratings_age_days=ratings_age,
-        freshness_weight=1.0,
-        buy_score=0.75,
+        stale_rating=stale,
         conviction="WATCH",
         sizing_hint="monitor, not yet",
-        stale_rating=False,
         fmv_upgraded=fmv_upgraded,
         price_change_pct=None,
         filter_reason=None,

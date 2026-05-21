@@ -4,10 +4,15 @@ import json
 import os
 import sys
 from dataclasses import dataclass, asdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 
-from ms_screener.src.config import DEFAULT_SNAPSHOT_TAB
 
+_DATE_FORMATS = [
+    "%Y-%m-%d",
+    "%b %d, %Y",
+    "%d %b %Y",
+    "%d %b %Y %H:%M, UTC",
+]
 
 MOAT_WEIGHT = {"Wide": 1.0, "Narrow": 0.85, "None": 0.65}
 UNCERT_WEIGHT = {
@@ -17,13 +22,6 @@ UNCERT_WEIGHT = {
     "Very High": 0.55,
     "Extreme": 0.40,
 }
-
-_DATE_FORMATS = [
-    "%Y-%m-%d",
-    "%b %d, %Y",
-    "%d %b %Y",
-    "%d %b %Y %H:%M, UTC",
-]
 
 
 def ratings_age_days(ratings_date_str: str | None) -> int | None:
@@ -38,56 +36,46 @@ def ratings_age_days(ratings_date_str: str | None) -> int | None:
     return None
 
 
-def freshness_weight(ratings_date_str: str | None) -> float:
+def is_stale(ratings_date_str: str | None) -> bool:
     age = ratings_age_days(ratings_date_str)
-    if age is None or age > 180:
-        return 0.70
-    if age > 90:
-        return 0.85
-    return 1.0
+    return age is None or age > 180
 
 
-def buy_score(
-    discount: float | None,
-    moat: str | None,
-    uncertainty: str | None,
-    ratings_date: str | None,
-) -> float | None:
-    if discount is None:
-        return None
-    mw = MOAT_WEIGHT.get(moat)
-    uw = UNCERT_WEIGHT.get(uncertainty)
-    if mw is None or uw is None:
-        return None
-    fw = freshness_weight(ratings_date)
-    discount_component = min((1 - discount) / 0.5, 1.0)
-    return discount_component * mw * uw * fw
+def conviction_tier(stars: int | None, stale: bool) -> str:
+    """
+    Stars are the primary signal. Freshness is the confidence modifier.
+      ★5 fresh  → STRONG BUY
+      ★5 stale  → BUY
+      ★4 fresh  → BUY
+      ★4 stale  → WATCH
+      ★3        → WATCH
+      ★1-2      → SKIP
+    """
+    if stars == 5:
+        return "BUY" if stale else "STRONG BUY"
+    if stars == 4:
+        return "WATCH" if stale else "BUY"
+    if stars == 3:
+        return "WATCH"
+    return "SKIP"
 
 
-def passes_prefilter(row: dict) -> tuple[bool, str | None]:
-    stars = parse_stars(row.get("stars"))
-    discount = parse_discount(row.get("discount") or row.get("price_to_fmv"))
-    moat = row.get("moat")
-    uncertainty = row.get("uncertainty")
-
-    if stars == 1:
-        return False, "1-star hard exclude"
-    if stars == 2 and (discount is None or discount >= 0.70):
-        return False, "2-star insufficient discount"
-    if discount is None or discount >= 1.0:
-        return False, "overvalued or missing discount"
-    if not moat or moat not in MOAT_WEIGHT:
-        return False, "moat unknown"
-    if not uncertainty:
-        return False, "uncertainty missing"
-    return True, None
+def sizing_hint(conviction: str, moat: str, uncertainty: str) -> str:
+    if conviction == "STRONG BUY" and moat == "Wide" and uncertainty == "Low":
+        return "consider larger position"
+    if conviction in ("STRONG BUY", "BUY"):
+        if uncertainty in ("High", "Very High"):
+            return "small starter position only"
+        return "standard position"
+    if conviction == "WATCH":
+        return "monitor, not yet"
+    return ""
 
 
 def parse_stars(raw: str | None) -> int | None:
     if raw is None:
         return None
     cleaned = str(raw).strip()
-    # count star chars
     count = cleaned.count("★")
     if count > 0:
         return count
@@ -114,48 +102,15 @@ def parse_discount(raw: str | None) -> float | None:
         return None
 
 
-@dataclass
-class ScoredStock:
-    ticker: str
-    company: str
-    discount: float
-    fair_value: float
-    last_price: float
-    moat: str
-    uncertainty: str
-    stars: int
-    ratings_date: str | None
-    ratings_age_days: int | None
-    freshness_weight: float
-    buy_score: float
-    conviction: str
-    sizing_hint: str
-    stale_rating: bool
-    fmv_upgraded: bool
-    price_change_pct: float | None
-    filter_reason: str | None
+def passes_prefilter(row: dict) -> tuple[bool, str | None]:
+    stars = parse_stars(row.get("stars"))
+    discount = parse_discount(row.get("discount") or row.get("price_to_fmv"))
 
-
-def conviction_tier(score: float) -> str:
-    if score >= 0.50:
-        return "STRONG BUY"
-    if score >= 0.30:
-        return "BUY"
-    if score >= 0.15:
-        return "WATCH"
-    return "SKIP"
-
-
-def sizing_hint(conviction: str, moat: str, uncertainty: str) -> str:
-    if conviction == "STRONG BUY" and moat == "Wide" and uncertainty == "Low":
-        return "consider larger position"
-    if conviction == "BUY":
-        if uncertainty in ("High", "Very High"):
-            return "small starter position only"
-        return "standard position"
-    if conviction == "WATCH":
-        return "monitor, not yet"
-    return ""
+    if stars is None or stars <= 2:
+        return False, f"{stars}-star exclude" if stars else "no star rating"
+    if discount is None or discount >= 1.0:
+        return False, "overvalued or missing discount"
+    return True, None
 
 
 def _safe_float(val) -> float | None:
@@ -166,14 +121,31 @@ def _safe_float(val) -> float | None:
 
 
 def _normalize(row: dict) -> dict:
-    """Lowercase all keys and map known sheet column variants."""
     out = {k.lower().strip(): v for k, v in row.items()}
-    # sheet-specific renames
-    if "ratings_date" not in out and "ratings_date" not in row:
-        out["ratings_date"] = out.pop("ratings_date", None)
     if "price_change (%)" in out:
         out["price_change_pct"] = out.pop("price_change (%)")
     return out
+
+
+@dataclass
+class ScoredStock:
+    ticker: str
+    company: str
+    discount: float          # price/FMV ratio (e.g. 0.89 = 11% off)
+    discount_pct: float      # 1 - discount, as percentage off FMV (e.g. 0.11)
+    fair_value: float
+    last_price: float
+    moat: str
+    uncertainty: str
+    stars: int
+    ratings_date: str | None
+    ratings_age_days: int | None
+    stale_rating: bool
+    conviction: str
+    sizing_hint: str
+    fmv_upgraded: bool
+    price_change_pct: float | None
+    filter_reason: str | None
 
 
 def score_all(rows: list[dict]) -> list[ScoredStock]:
@@ -192,86 +164,42 @@ def score_all(rows: list[dict]) -> list[ScoredStock]:
         last_price = _safe_float(row.get("last_price") or row.get("price"))
         price_change_pct = _safe_float(row.get("price_change_pct") or row.get("pricechangepct"))
 
-        passed, reason = passes_prefilter(row)
-
         age = ratings_age_days(ratings_date)
-        fw = freshness_weight(ratings_date)
-        stale = (age is None or age > 180)
+        stale = is_stale(ratings_date)
 
+        passed, reason = passes_prefilter(row)
         if not passed:
             results.append(ScoredStock(
-                ticker=ticker,
-                company=company,
-                discount=discount or 0.0,
-                fair_value=fair_value or 0.0,
-                last_price=last_price or 0.0,
-                moat=moat or "",
-                uncertainty=uncertainty or "",
-                stars=stars or 0,
-                ratings_date=ratings_date,
-                ratings_age_days=age,
-                freshness_weight=fw,
-                buy_score=None,
-                conviction="SKIP",
-                sizing_hint="",
-                stale_rating=stale,
-                fmv_upgraded=False,
-                price_change_pct=price_change_pct,
+                ticker=ticker, company=company,
+                discount=discount or 0.0, discount_pct=1 - (discount or 1.0),
+                fair_value=fair_value or 0.0, last_price=last_price or 0.0,
+                moat=moat or "", uncertainty=uncertainty or "",
+                stars=stars or 0, ratings_date=ratings_date,
+                ratings_age_days=age, stale_rating=stale,
+                conviction="SKIP", sizing_hint="",
+                fmv_upgraded=False, price_change_pct=price_change_pct,
                 filter_reason=reason,
             ))
             continue
 
-        score = buy_score(discount, moat, uncertainty, ratings_date)
-        if score is None:
-            results.append(ScoredStock(
-                ticker=ticker,
-                company=company,
-                discount=discount or 0.0,
-                fair_value=fair_value or 0.0,
-                last_price=last_price or 0.0,
-                moat=moat or "",
-                uncertainty=uncertainty or "",
-                stars=stars or 0,
-                ratings_date=ratings_date,
-                ratings_age_days=age,
-                freshness_weight=fw,
-                buy_score=None,
-                conviction="SKIP",
-                sizing_hint="",
-                stale_rating=stale,
-                fmv_upgraded=False,
-                price_change_pct=price_change_pct,
-                filter_reason="score computation failed",
-            ))
-            continue
-
-        conv = conviction_tier(score)
-        if conv == "STRONG BUY" and stale:
-            conv = "BUY"  # fresh data required for highest conviction
-        hint = sizing_hint(conv, moat, uncertainty)
+        conv = conviction_tier(stars, stale)
+        hint = sizing_hint(conv, moat or "", uncertainty or "")
 
         results.append(ScoredStock(
-            ticker=ticker,
-            company=company,
-            discount=discount,
-            fair_value=fair_value or 0.0,
-            last_price=last_price or 0.0,
-            moat=moat,
-            uncertainty=uncertainty,
-            stars=stars or 0,
-            ratings_date=ratings_date,
-            ratings_age_days=age,
-            freshness_weight=fw,
-            buy_score=score,
-            conviction=conv,
-            sizing_hint=hint,
-            stale_rating=stale,
-            fmv_upgraded=False,
-            price_change_pct=price_change_pct,
+            ticker=ticker, company=company,
+            discount=discount, discount_pct=round(1 - discount, 4),
+            fair_value=fair_value or 0.0, last_price=last_price or 0.0,
+            moat=moat or "", uncertainty=uncertainty or "",
+            stars=stars or 0, ratings_date=ratings_date,
+            ratings_age_days=age, stale_rating=stale,
+            conviction=conv, sizing_hint=hint,
+            fmv_upgraded=False, price_change_pct=price_change_pct,
             filter_reason=None,
         ))
 
-    results.sort(key=lambda s: (s.buy_score is None, -(s.buy_score or 0)))
+    # sort: conviction tier first, then by discount_pct descending within tier
+    tier_order = {"STRONG BUY": 0, "BUY": 1, "WATCH": 2, "SKIP": 3}
+    results.sort(key=lambda s: (tier_order.get(s.conviction, 9), -(s.discount_pct or 0)))
     return results
 
 
