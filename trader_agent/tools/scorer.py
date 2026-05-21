@@ -102,11 +102,11 @@ def parse_stars(raw: str | None) -> int | None:
 def parse_discount(raw: str | None) -> float | None:
     if raw is None:
         return None
-    cleaned = str(raw).strip().rstrip("%")
+    s = str(raw).strip()
+    is_pct = s.endswith("%")
     try:
-        val = float(cleaned)
-        # if expressed as percentage like "77" meaning 77%
-        if val > 1.5:
+        val = float(s.rstrip("%"))
+        if is_pct:
             val = val / 100.0
         return val
     except (ValueError, TypeError):
@@ -159,25 +159,37 @@ def sizing_hint(conviction: str, moat: str, uncertainty: str) -> str:
 
 def _safe_float(val) -> float | None:
     try:
-        return float(val)
+        return float(str(val).strip().lstrip("$").replace(",", ""))
     except (TypeError, ValueError):
         return None
 
 
+def _normalize(row: dict) -> dict:
+    """Lowercase all keys and map known sheet column variants."""
+    out = {k.lower().strip(): v for k, v in row.items()}
+    # sheet-specific renames
+    if "ratings_date" not in out and "ratings_date" not in row:
+        out["ratings_date"] = out.pop("ratings_date", None)
+    if "price_change (%)" in out:
+        out["price_change_pct"] = out.pop("price_change (%)")
+    return out
+
+
 def score_all(rows: list[dict]) -> list[ScoredStock]:
     results = []
-    for row in rows:
+    for raw_row in rows:
+        row = _normalize(raw_row)
         ticker = str(row.get("ticker", "")).strip()
         company = str(row.get("company", row.get("name", ""))).strip()
         moat = str(row.get("moat", "")).strip() or None
         uncertainty = str(row.get("uncertainty", "")).strip() or None
-        ratings_date = row.get("ratings_date") or row.get("ratingsDate") or None
+        ratings_date = row.get("ratings_date") or row.get("ratingsdate") or None
         raw_discount = row.get("discount") or row.get("price_to_fmv")
         discount = parse_discount(raw_discount)
         stars = parse_stars(row.get("stars"))
-        fair_value = _safe_float(row.get("fair_value") or row.get("fairValue"))
+        fair_value = _safe_float(row.get("fair_value") or row.get("fairvalue"))
         last_price = _safe_float(row.get("last_price") or row.get("price"))
-        price_change_pct = _safe_float(row.get("price_change_pct") or row.get("priceChangePct"))
+        price_change_pct = _safe_float(row.get("price_change_pct") or row.get("pricechangepct"))
 
         passed, reason = passes_prefilter(row)
 

@@ -79,9 +79,11 @@ def apply_fmv_flags(
 
 
 if __name__ == "__main__":
+    from dotenv import find_dotenv, load_dotenv
     from trader_agent.tools.loader import load_fmv_history
 
-    sheet_id = os.environ["GOOGLE_SHEET_ID"]
+    load_dotenv(find_dotenv())
+    sheet_id = os.environ["SHEET_ID"]
     history = load_fmv_history(sheet_id)
     upgrades = detect_fmv_upgrades(history)
     output = {ticker: {"fmv_upgraded": True, "change_pct": pct} for ticker, pct in upgrades.items()}
