@@ -10,6 +10,7 @@ import smtplib
 import sys
 from datetime import date
 from email.message import EmailMessage
+from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
@@ -191,6 +192,15 @@ def build_html(data: dict) -> str:
 </html>"""
 
 
+_LOGS_DIR = Path(__file__).parent.parent / "logs"
+
+
+def _archive_brief(data: dict, today: str) -> None:
+    _LOGS_DIR.mkdir(exist_ok=True)
+    dest = _LOGS_DIR / f"{today}_brief.json"
+    dest.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: send_reasoned_brief <path_to_brief_json>", file=sys.stderr)
@@ -200,6 +210,7 @@ def main() -> None:
     html_body = build_html(data)
 
     today = data.get("date", date.today().strftime("%Y-%m-%d"))
+    _archive_brief(data, today)
     username = os.environ["EMAIL_USERNAME"]
     password = os.environ["EMAIL_PASSWORD"]
     recipients = [e.strip() for e in os.environ.get("ALERT_EMAILS", username).split(",")]

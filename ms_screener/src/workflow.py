@@ -359,12 +359,23 @@ def run_workflow(cfg: RunConfig) -> RunResult:
                 if row.get(InColumn.PERFORMANCE_ID)
             ]
             try:
+                fmv_changed_tickers = {
+                    r.get(OutColumn.TICKER, "").upper()
+                    for r in fmv_changes
+                    if r.get(OutColumn.TICKER)
+                }
+                if fmv_changed_tickers:
+                    console.print(
+                        f"[cyan]• FMV-changed tickers forced into scrape: "
+                        f"{', '.join(sorted(fmv_changed_tickers))}[/cyan]"
+                    )
                 scrape_result = individual_scraper.scrape_individual_pages(
                     driver, stocks,
                     max_stocks=cfg.scrape_max_stocks,
                     rate_limit_seconds=cfg.scrape_rate_limit,
                     download_dir=download_dir,
                     tickers=cfg.scrape_tickers or None,
+                    force_tickers=fmv_changed_tickers,
                 )
                 if scrape_result.updated and cfg.sheet_id:
                     if not cfg.dry_run:

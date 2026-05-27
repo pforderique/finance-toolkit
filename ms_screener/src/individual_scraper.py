@@ -38,6 +38,7 @@ def scrape_individual_pages(
     rate_limit_seconds: float = 3.0,
     download_dir: Optional[Path] = None,
     tickers: Optional[list[str]] = None,
+    force_tickers: Optional[set[str]] = None,
 ) -> IndividualScrapeResult:
     """
     Two-phase scrape: first download+persist all PDFs, then extract from all persisted PDFs.
@@ -68,9 +69,12 @@ def scrape_individual_pages(
         skipped = []
         console.print(f"[cyan]• Individual scrape: {len(qualifying)} pinned ticker(s)[/cyan]")
     else:
-        qualifying, skipped = _filter_stale_stocks(stocks)
+        qualifying, skipped = _filter_stale_stocks(stocks, force_tickers=force_tickers or set())
+        fmv_forced = len(force_tickers & {s["ticker"].upper() for s in qualifying}) if force_tickers else 0
         console.print(
-            f"[cyan]• {len(qualifying)} stocks qualify, {len(skipped)} skipped (not stale)[/cyan]"
+            f"[cyan]• {len(qualifying)} stocks qualify"
+            + (f" ({fmv_forced} forced by FMV change)" if fmv_forced else "")
+            + f", {len(skipped)} skipped (not stale)[/cyan]"
         )
 
     pending = []
@@ -201,8 +205,8 @@ def _is_stale(ratings_date: Optional[str], tier: int) -> bool:
     return True
 
 
-def _filter_stale_stocks(stocks: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Filter stocks into qualifying (stale) and skipped (fresh) lists."""
+def _filter_stale_stocks(stocks: list[dict], force_tickers: set[str] = frozenset()) -> tuple[list[dict], list[dict]]:
+    """Filter stocks into qualifying (stale/forced) and skipped (fresh) lists."""
     qualifying = []
     skipped = []
 
@@ -213,7 +217,7 @@ def _filter_stale_stocks(stocks: list[dict]) -> tuple[list[dict], list[dict]]:
         ticker = stock.get("ticker", "").upper()
         has_pdf = bool(list(ARTIFACTS_DIR.glob(f"{ticker}_*.pdf")))
         tier = _assign_tier(stock.get("moat"), stock.get("uncertainty"))
-        if not has_pdf or _is_stale(stock.get("ratings_date"), tier):
+        if ticker in force_tickers or not has_pdf or _is_stale(stock.get("ratings_date"), tier):
             qualifying.append(stock)
         else:
             skipped.append(stock)
