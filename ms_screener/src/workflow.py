@@ -323,21 +323,6 @@ def run_workflow(cfg: RunConfig) -> RunResult:
                 f" {cfg.snapshot_tab} ({len(snapshot)} rows)"
             )
 
-        try:
-            io_layer.update_sheet(
-                cfg.sheet_id,
-                cfg.changes_tab,
-                fmv_changes,
-                headers=transform.FMV_CHANGE_HEADERS,
-            )
-        except RuntimeError as exc:
-            warnings.append(f"Fair value tab update failed: {exc}")
-        else:
-            console.print(
-                "[green]• Fair value tab updated:[/green]"
-                f" {cfg.changes_tab} ({len(fmv_changes)} rows)"
-            )
-
     # Write local FMV changes CSV (overwrite is fine for local)
     if fmv_changes:
         io_layer.write_csv(fmv_changes_csv, fmv_changes, headers=transform.FMV_CHANGE_HEADERS)
