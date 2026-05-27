@@ -116,6 +116,14 @@ Launch all STRONG BUY subagents in a single message so they run in parallel. Wai
 
 BUY tickers: PDF data + screener data only. No web research.
 
+**Research-based demotion (STRONG BUY → BUY only):**
+If web research surfaces a severe, recent, non-earnings event — major lawsuit, DOJ/SEC
+investigation, executive fraud, product recall with liability, or reputational collapse
+(think UNH-style) — demote to BUY and set `conviction_override: true`. Note it in `notes`.
+Do NOT demote for: earnings misses, guidance cuts, macro headwinds, or analyst downgrades —
+Morningstar already prices those into stars. Bar is: "would a long-term investor pause
+before sizing in today because of something Morningstar may not have caught yet?"
+
 For ALL actionable tickers (STRONG BUY + BUY), incorporate the query_history output
 into the reasoning field. Call out:
 - Any consistent multi-revision FMV trend (up or down)
