@@ -206,8 +206,28 @@ def score_all(rows: list[dict]) -> list[ScoredStock]:
 if __name__ == "__main__":
     from trader_agent.tools.loader import load_screener
 
+    actionable_only = "--actionable-only" in sys.argv
+
     sheet_id = os.environ["SHEET_ID"]
     rows = load_screener(sheet_id)
     scored = score_all(rows)
-    json.dump([asdict(s) for s in scored], sys.stdout, indent=2, default=str)
+
+    if actionable_only:
+        skip_count = sum(1 for s in scored if s.conviction == "SKIP")
+        output = [asdict(s) for s in scored if s.conviction != "SKIP"]
+        # inject stats so agent knows total
+        meta = {
+            "_stats": {
+                "total": len(scored),
+                "strong_buy": sum(1 for s in scored if s.conviction == "STRONG BUY"),
+                "buy": sum(1 for s in scored if s.conviction == "BUY"),
+                "watch": sum(1 for s in scored if s.conviction == "WATCH"),
+                "skipped": skip_count,
+            },
+            "stocks": output,
+        }
+        json.dump(meta, sys.stdout, indent=2, default=str)
+    else:
+        json.dump([asdict(s) for s in scored], sys.stdout, indent=2, default=str)
+
     sys.stdout.write("\n")

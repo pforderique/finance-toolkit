@@ -334,6 +334,7 @@ def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> 
             prev_by_ticker[ticker] = row
 
     today_iso = dt.date.today().isoformat()
+    today_formatted = dt.date.today().strftime("%b %d, %Y")
     changes: list[dict] = []
     for row in curr_rows:
         ticker_value = row.get(OutColumn.TICKER) or ""
@@ -370,7 +371,7 @@ def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> 
             ),
             "current_stars": coerce_int(row.get(OutColumn.STARS)),
             "previous_rating_date": prev_row.get(OutColumn.RATINGS_DATE),
-            "current_rating_date": today_iso,
+            "current_rating_date": today_formatted,
         }
         changes.append(change_row)
 

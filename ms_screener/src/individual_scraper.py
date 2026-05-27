@@ -18,7 +18,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from ms_screener.src.logging_setup import console
 
 BASE_URL = "https://research-morningstar-com.ezproxy.spl.org/quotes/{perf_id}"
-TIER_THRESHOLDS = {1: 30, 2: 90, 3: 180}
+TIER_THRESHOLDS = {1: 14, 2: 30, 3: 60}
 PAGE_WAIT_SECONDS = 30
 
 
@@ -210,8 +210,10 @@ def _filter_stale_stocks(stocks: list[dict]) -> tuple[list[dict], list[dict]]:
         if not stock.get("perf_id"):
             continue
 
+        ticker = stock.get("ticker", "").upper()
+        has_pdf = bool(list(ARTIFACTS_DIR.glob(f"{ticker}_*.pdf")))
         tier = _assign_tier(stock.get("moat"), stock.get("uncertainty"))
-        if _is_stale(stock.get("ratings_date"), tier):
+        if not has_pdf or _is_stale(stock.get("ratings_date"), tier):
             qualifying.append(stock)
         else:
             skipped.append(stock)
