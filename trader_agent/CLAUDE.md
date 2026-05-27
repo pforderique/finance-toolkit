@@ -15,7 +15,7 @@ You do NOT make final decisions for the user — you surface signals and let him
 ## Step-by-step workflow
 
 ### 1. Load and score
-Run both in parallel:
+Run all three in parallel:
 
   python -m trader_agent.tools.scorer --actionable-only
 
@@ -27,20 +27,42 @@ Run both in parallel:
   print(json.dumps({r['Ticker']: r['Performance_ID'] for r in rows}))
   "
 
+  python -m trader_agent.tools.history_db
+
 Scorer returns `{"_stats": {...}, "stocks": [...]}`. SKIPs are omitted; use `_stats.skipped` for the count.
 Build a perf_id lookup dict from the second command. Morningstar URL per ticker:
   https://research-morningstar-com.ezproxy.spl.org/quotes/{perf_id}
+
+`history_db` loads FMV_History into `/tmp/fmv_history.db` — a SQLite DB that all
+subsequent steps query without re-hitting the sheet. Prints a summary (row count, date range).
+If it fails or returns 0 rows, proceed without history data and note it.
 
 Separate `stocks` list into:
   - strong_buys:  conviction == "STRONG BUY"
   - buys:         conviction == "BUY"
   - watches:      conviction == "WATCH"  (show only if strong_buys + buys < 5)
 
-### 2. Load FMV signals
-Run:
+### 2. Load FMV signals and history trends
+Run both in parallel:
+
   python -m trader_agent.tools.signals
 
-Parse JSON. Note which tickers have fmv_upgraded=True.
+  python -m trader_agent.tools.query_history TICK1 TICK2 ...   # all actionable tickers
+
+`signals` returns upgrade flags (fmv_upgraded=True for >15% FMV rise in last 60 days).
+
+`query_history` returns per-ticker trend data from the local SQLite DB. For each ticker:
+- `revisions`: number of FMV changes ever recorded
+- `fmv_history`: list of {date, previous_fmv, current_fmv, delta, previous_stars, current_stars}
+- `net_fmv_change_pct`: total FMV change since first recorded revision
+- `fmv_direction`: "up" / "down" / "flat"
+- `stars_start` / `stars_end` / `stars_direction`: "rising" / "falling" / "stable"
+- `downgrades`: number of downward FMV revisions
+
+Use this data when writing reasoning: note if Morningstar has been consistently raising
+the FMV (conviction growing), cutting it (model weakening), or if stars have trended up
+or down. A stock with fmv_direction="up" and stars_direction="rising" over multiple
+revisions is a stronger signal than a one-off upgrade.
 
 ### 2b. Extract PDF data (zero Claude tokens — Python does it)
 
@@ -68,6 +90,13 @@ Launch all STRONG BUY subagents in a single message so they run in parallel. Wai
 
 BUY tickers: PDF data + screener data only. No web research.
 
+For ALL actionable tickers (STRONG BUY + BUY), incorporate the query_history output from
+step 2 into the reasoning field. Specifically call out:
+- Any consistent multi-revision FMV trend (up or down)
+- Stars trajectory if it changed across revisions
+- Number of downgrades (a red flag if >1 in recent history)
+Keep it to one sentence unless the trend is notable.
+
 ### 3. Write brief as JSON to /tmp/trader_brief.json
 
 Output a single valid JSON object. Do not include any text before or after it.
@@ -93,7 +122,9 @@ Schema:
       "analyst": "Dan Romanoff CPA",
       "morningstar_url": "https://research-morningstar-com.ezproxy.spl.org/quotes/0P000000GY",
       "notes": "Brief warning if any, e.g. 'FMV quant est.' or 'PDF Oct 2025' — null if none",
-      "reasoning": "2-4 sentence reasoning from PDF + web research",
+      "fmv_trend": {"revisions": 3, "net_change_pct": 9.5, "direction": "up", "downgrades": 0},
+      "stars_trend": {"start": 4, "end": 5, "direction": "rising"},
+      "reasoning": "2-4 sentence reasoning from PDF + web research + history trend",
       "sources": [
         {"url": "https://...", "title": "Morningstar PDF — Dan Romanoff", "date": "2026-04-30"},
         {"url": "https://...", "title": "MSFT Q3 2026 earnings", "date": "2026-04-29"}
