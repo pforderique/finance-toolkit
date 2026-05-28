@@ -11,16 +11,19 @@ Output: JSON dict keyed by ticker.
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 ARTIFACTS_DIR = Path(__file__).parent.parent.parent / "ms_screener" / "artifacts"
 
+_PDFTOTEXT = shutil.which("pdftotext") or "/opt/homebrew/bin/pdftotext"
+
 
 def _pdf_to_text(pdf_path: Path) -> str:
     result = subprocess.run(
-        ["pdftotext", "-layout", str(pdf_path), "-"],
+        [_PDFTOTEXT, "-layout", str(pdf_path), "-"],
         capture_output=True, text=True,
     )
     return result.stdout
