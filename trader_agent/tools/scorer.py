@@ -5,6 +5,7 @@ import os
 import sys
 from dataclasses import dataclass, asdict
 from datetime import date, datetime
+from typing import Optional, Tuple
 
 
 _DATE_FORMATS = [
@@ -24,7 +25,7 @@ UNCERT_WEIGHT = {
 }
 
 
-def ratings_age_days(ratings_date_str: str | None) -> int | None:
+def ratings_age_days(ratings_date_str: Optional[str]) -> Optional[int]:
     if not ratings_date_str:
         return None
     for fmt in _DATE_FORMATS:
@@ -36,12 +37,12 @@ def ratings_age_days(ratings_date_str: str | None) -> int | None:
     return None
 
 
-def is_stale(ratings_date_str: str | None) -> bool:
+def is_stale(ratings_date_str: Optional[str]) -> bool:
     age = ratings_age_days(ratings_date_str)
     return age is None or age > 180
 
 
-def conviction_tier(stars: int | None, stale: bool) -> str:
+def conviction_tier(stars: Optional[int], stale: bool) -> str:
     """
     Stars are the primary signal. Freshness is the confidence modifier.
       ★5 fresh  → STRONG BUY
@@ -72,7 +73,7 @@ def sizing_hint(conviction: str, moat: str, uncertainty: str) -> str:
     return ""
 
 
-def parse_stars(raw: str | None) -> int | None:
+def parse_stars(raw: Optional[str]) -> Optional[int]:
     if raw is None:
         return None
     cleaned = str(raw).strip()
@@ -88,7 +89,7 @@ def parse_stars(raw: str | None) -> int | None:
     return None
 
 
-def parse_discount(raw: str | None) -> float | None:
+def parse_discount(raw: Optional[str]) -> Optional[float]:
     if raw is None:
         return None
     s = str(raw).strip()
@@ -102,7 +103,7 @@ def parse_discount(raw: str | None) -> float | None:
         return None
 
 
-def passes_prefilter(row: dict) -> tuple[bool, str | None]:
+def passes_prefilter(row: dict) -> Tuple[bool, Optional[str]]:
     stars = parse_stars(row.get("stars"))
     discount = parse_discount(row.get("discount") or row.get("price_to_fmv"))
 
@@ -113,7 +114,7 @@ def passes_prefilter(row: dict) -> tuple[bool, str | None]:
     return True, None
 
 
-def _safe_float(val) -> float | None:
+def _safe_float(val) -> Optional[float]:
     try:
         return float(str(val).strip().lstrip("$").replace(",", ""))
     except (TypeError, ValueError):
@@ -138,14 +139,14 @@ class ScoredStock:
     moat: str
     uncertainty: str
     stars: int
-    ratings_date: str | None
-    ratings_age_days: int | None
+    ratings_date: Optional[str]
+    ratings_age_days: Optional[int]
     stale_rating: bool
     conviction: str
     sizing_hint: str
     fmv_upgraded: bool
-    price_change_pct: float | None
-    filter_reason: str | None
+    price_change_pct: Optional[float]
+    filter_reason: Optional[str]
 
 
 def score_all(rows: list[dict]) -> list[ScoredStock]:
