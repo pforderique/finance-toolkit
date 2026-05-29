@@ -16,3 +16,4 @@ ms_screener/artifacts/
 .idea/
 research/**/config.json
 research/
+**/.DS_Store
