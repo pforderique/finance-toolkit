@@ -28,6 +28,10 @@ FMV_CHANGE_HEADERS = [
     "fair_value_delta",
     "previous_stars",
     "current_stars",
+    "previous_uncertainty",
+    "current_uncertainty",
+    "previous_moat",
+    "current_moat",
     "previous_rating_date",
     "current_rating_date",
 ]
@@ -323,7 +327,7 @@ def compare_ready_perf_ids(collected_rows: Iterable[dict]) -> list[str]:
 
 
 def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> list[dict]:
-    """Identify tickers where fair value changed between previous and current snapshots."""
+    """Identify tickers where any analyzed field changed between previous and current snapshots."""
 
     prev_by_ticker: dict[str, dict] = {}
     for row in prev_rows:
@@ -348,10 +352,24 @@ def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> 
                 OutColumn.FAIR_VALUE.title())
         )
         curr_fv = coerce_float(row.get(OutColumn.FAIR_VALUE))
+        prev_stars = coerce_int(
+            prev_row.get(OutColumn.STARS) or prev_row.get(OutColumn.STARS.title())
+        )
+        curr_stars = coerce_int(row.get(OutColumn.STARS))
+        prev_uncertainty = prev_row.get(OutColumn.UNCERTAINTY)
+        curr_uncertainty = row.get(OutColumn.UNCERTAINTY)
+        prev_moat = prev_row.get(OutColumn.MOAT)
+        curr_moat = row.get(OutColumn.MOAT)
 
-        if prev_fv is None and curr_fv is None:
-            continue
-        if prev_fv is not None and curr_fv is not None and abs(prev_fv - curr_fv) < 1e-6:
+        fv_changed = not (prev_fv is None and curr_fv is None)
+        if fv_changed and prev_fv is not None and curr_fv is not None and abs(prev_fv - curr_fv) < 1e-6:
+            fv_changed = False
+
+        stars_changed = prev_stars != curr_stars
+        uncertainty_changed = prev_uncertainty != curr_uncertainty
+        moat_changed = prev_moat != curr_moat
+
+        if not (fv_changed or stars_changed or uncertainty_changed or moat_changed):
             continue
 
         delta = None
@@ -365,11 +383,12 @@ def detect_fmv_changes(prev_rows: Iterable[dict], curr_rows: Iterable[dict]) -> 
             "previous_fair_value": round_to(prev_fv, 2),
             "current_fair_value": round_to(curr_fv, 2),
             "fair_value_delta": delta,
-            "previous_stars": coerce_int(
-                prev_row.get(OutColumn.STARS) or prev_row.get(
-                    OutColumn.STARS.title())
-            ),
-            "current_stars": coerce_int(row.get(OutColumn.STARS)),
+            "previous_stars": prev_stars,
+            "current_stars": curr_stars,
+            "previous_uncertainty": prev_uncertainty,
+            "current_uncertainty": curr_uncertainty,
+            "previous_moat": prev_moat,
+            "current_moat": curr_moat,
             "previous_rating_date": prev_row.get(OutColumn.RATINGS_DATE),
             "current_rating_date": today_formatted,
         }

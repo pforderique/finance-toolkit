@@ -30,7 +30,7 @@ def run(
     changes_tab: str = typer.Option(
         "FMV_Tracker", "--changes-tab", help="Output tab for fair value deltas (Sheets)"),
     fmv_history_tab: str = typer.Option(
-        "FMV_History", "--fmv-history-tab", help="Output tab for FMV history (append-only, Sheets)"),
+        "Data_Changes", "--fmv-history-tab", help="Output tab for data changes (append-only, Sheets)"),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Do everything except write to Google Sheets"),
     log_level: str = typer.Option(
