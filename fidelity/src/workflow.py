@@ -130,7 +130,7 @@ def run_workflow(cfg: RunConfig) -> RunResult:
         new_row[0] = holding.ticker
         new_row[1] = _format_numeric(holding.shares)
         new_row[2] = _format_numeric(holding.avg_cost)
-        new_row[3] = _market_price_formula(row_index=idx, holding=holding)
+        new_row[3] = ""  # D3 ARRAYFORMULA (VLOOKUP to H:I lookup table) fills this automatically
         new_row[4] = e_template.format(row=idx)
         new_row[5] = f_template.format(row=idx)
         new_row[6] = holding.account_label
@@ -212,16 +212,6 @@ def _needs_update(old: float | None, new: float) -> bool:
 def _format_numeric(value: float | None) -> str:
     return f"{value:.6f}".rstrip("0").rstrip(".") if value is not None else ""
 
-
-def _market_price_formula(*, row_index: int, holding: HoldingRecord) -> str:
-    custom_formula = constants.CUSTOM_MARKET_PRICE_FORMULAS_BY_TICKER.get(holding.ticker)
-    if custom_formula is None and holding.description:
-        custom_formula = constants.CUSTOM_MARKET_PRICE_FORMULAS_BY_DESCRIPTION.get(
-            holding.description
-        )
-    if custom_formula:
-        return custom_formula
-    return f'=IFERROR(GOOGLEFINANCE(A{row_index}), "")'
 
 
 def _render_summary_table(
