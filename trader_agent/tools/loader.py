@@ -21,7 +21,7 @@ def load_screener(sheet_id: str = None, tab: str = DEFAULT_SNAPSHOT_TAB) -> list
 
 
 def load_fmv_history(sheet_id: str = None, tab: str = DEFAULT_FMV_HISTORY_TAB) -> list[dict]:
-    """Read FMV_History tab. Returns raw row dicts."""
+    """Read Data_Changes tab. Returns raw row dicts."""
     if sheet_id is None:
         sheet_id = os.environ["SHEET_ID"]
     return read_sheet_as_dicts(sheet_id, tab)

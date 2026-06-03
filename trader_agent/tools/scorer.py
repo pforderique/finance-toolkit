@@ -24,6 +24,20 @@ UNCERT_WEIGHT = {
     "Extreme": 0.40,
 }
 
+# Trim trigger: sell when price/FMV >= threshold (accounts for uncertainty band + staleness)
+_TRIM_THRESHOLDS = {
+    #              (fresh, stale)
+    "Low":       (1.00, 1.10),
+    "Medium":    (1.05, 1.15),
+    "High":      (1.15, 1.25),
+    "Very High": (1.30, 1.40),
+}
+
+
+def trim_threshold(uncertainty: str, stale: bool) -> float:
+    pair = _TRIM_THRESHOLDS.get(uncertainty, (1.05, 1.15))
+    return pair[1] if stale else pair[0]
+
 
 def ratings_age_days(ratings_date_str: Optional[str]) -> Optional[int]:
     if not ratings_date_str:
@@ -45,12 +59,12 @@ def is_stale(ratings_date_str: Optional[str]) -> bool:
 def conviction_tier(stars: Optional[int], stale: bool) -> str:
     """
     Stars are the primary signal. Freshness is the confidence modifier.
-      ★5 fresh  → STRONG BUY
-      ★5 stale  → BUY
-      ★4 fresh  → BUY
-      ★4 stale  → WATCH
+      ★5 fresh  → STRONG BUY     ★5 stale  → BUY
+      ★4 fresh  → BUY            ★4 stale  → WATCH
       ★3        → WATCH
-      ★1-2      → SKIP
+      ★2 fresh  → SELL           ★2 stale  → SELL (sizing demoted to sm)
+      ★1        → STRONG SELL
+    TRIM is applied separately in score_all() based on price vs FMV threshold.
     """
     if stars == 5:
         return "BUY" if stale else "STRONG BUY"
@@ -58,18 +72,32 @@ def conviction_tier(stars: Optional[int], stale: bool) -> str:
         return "WATCH" if stale else "BUY"
     if stars == 3:
         return "WATCH"
+    if stars == 2:
+        return "SELL"
+    if stars == 1:
+        return "STRONG SELL"
     return "SKIP"
 
 
-def sizing_hint(conviction: str, moat: str, uncertainty: str) -> str:
+def sizing_hint(conviction: str, moat: str, uncertainty: str, stale: bool = False) -> str:
+    # Buy side
     if conviction == "STRONG BUY" and moat == "Wide" and uncertainty == "Low":
-        return "consider larger position"
+        return "lg"
     if conviction in ("STRONG BUY", "BUY"):
         if uncertainty in ("High", "Very High"):
-            return "small starter position only"
-        return "standard position"
+            return "sm"
+        return "md"
     if conviction == "WATCH":
-        return "monitor, not yet"
+        return "monitor"
+    # Sell side — mirror buy logic; stale 2-star gets sm (less confident)
+    if conviction == "STRONG SELL":
+        return "lg"
+    if conviction == "SELL":
+        if stale or uncertainty in ("High", "Very High"):
+            return "sm"
+        return "md"
+    if conviction == "TRIM":
+        return "sm"
     return ""
 
 
@@ -105,10 +133,12 @@ def parse_discount(raw: Optional[str]) -> Optional[float]:
 
 def passes_prefilter(row: dict) -> Tuple[bool, Optional[str]]:
     stars = parse_stars(row.get("stars"))
-    discount = parse_discount(row.get("discount") or row.get("price_to_fmv"))
 
-    if stars is None or stars <= 2:
-        return False, f"{stars}-star exclude" if stars else "no star rating"
+    if stars is None:
+        return False, "no star rating"
+    if stars <= 2:
+        return True, None  # sell signals — pass regardless of discount
+    discount = parse_discount(row.get("discount") or row.get("price_to_fmv"))
     if discount is None or discount >= 1.0:
         return False, "overvalued or missing discount"
     return True, None
@@ -184,11 +214,18 @@ def score_all(rows: list[dict]) -> list[ScoredStock]:
             continue
 
         conv = conviction_tier(stars, stale)
-        hint = sizing_hint(conv, moat or "", uncertainty or "")
+
+        # TRIM trigger: WATCH stocks trading above uncertainty-adjusted FMV threshold
+        if conv == "WATCH" and discount is not None:
+            if discount >= trim_threshold(uncertainty or "", stale):
+                conv = "TRIM"
+
+        hint = sizing_hint(conv, moat or "", uncertainty or "", stale)
 
         results.append(ScoredStock(
             ticker=ticker, company=company,
-            discount=discount, discount_pct=round(1 - discount, 4),
+            discount=discount if discount is not None else 0.0,
+            discount_pct=round(1 - discount, 4) if discount is not None else 0.0,
             fair_value=fair_value or 0.0, last_price=last_price or 0.0,
             moat=moat or "", uncertainty=uncertainty or "",
             stars=stars or 0, ratings_date=ratings_date,
@@ -198,10 +235,29 @@ def score_all(rows: list[dict]) -> list[ScoredStock]:
             filter_reason=None,
         ))
 
-    # sort: conviction tier first, then by discount_pct descending within tier
-    tier_order = {"STRONG BUY": 0, "BUY": 1, "WATCH": 2, "SKIP": 3}
+    # sort: buy side first (best conviction), then sell side by urgency, then skip
+    tier_order = {
+        "STRONG BUY": 0, "BUY": 1, "WATCH": 2,
+        "TRIM": 3, "STRONG SELL": 4, "SELL": 5, "SKIP": 6,
+    }
     results.sort(key=lambda s: (tier_order.get(s.conviction, 9), -(s.discount_pct or 0)))
     return results
+
+
+def _save_snapshot(scored: list) -> None:
+    from pathlib import Path
+    logs_dir = Path(__file__).parent.parent / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    today = date.today().strftime("%Y-%m-%d")
+    snapshot = [
+        {"ticker": s.ticker, "company": s.company, "conviction": s.conviction,
+         "stars": s.stars, "fmv": s.fair_value, "last_price": s.last_price,
+         "pct_of_fmv": round(s.discount * 100, 1), "moat": s.moat}
+        for s in scored
+    ]
+    (logs_dir / f"{today}_scores.json").write_text(
+        json.dumps(snapshot, indent=2), encoding="utf-8"
+    )
 
 
 if __name__ == "__main__":
@@ -212,17 +268,20 @@ if __name__ == "__main__":
     sheet_id = os.environ["SHEET_ID"]
     rows = load_screener(sheet_id)
     scored = score_all(rows)
+    _save_snapshot(scored)
 
     if actionable_only:
         skip_count = sum(1 for s in scored if s.conviction == "SKIP")
         output = [asdict(s) for s in scored if s.conviction != "SKIP"]
-        # inject stats so agent knows total
         meta = {
             "_stats": {
                 "total": len(scored),
                 "strong_buy": sum(1 for s in scored if s.conviction == "STRONG BUY"),
                 "buy": sum(1 for s in scored if s.conviction == "BUY"),
                 "watch": sum(1 for s in scored if s.conviction == "WATCH"),
+                "trim": sum(1 for s in scored if s.conviction == "TRIM"),
+                "sell": sum(1 for s in scored if s.conviction == "SELL"),
+                "strong_sell": sum(1 for s in scored if s.conviction == "STRONG SELL"),
                 "skipped": skip_count,
             },
             "stocks": output,

@@ -1,4 +1,4 @@
-"""Load FMV_History from Google Sheets into a local SQLite DB at /tmp/fmv_history.db.
+"""Load Data_Changes from Google Sheets into a local SQLite DB at /tmp/fmv_history.db.
 
 Run once at the start of the trader_agent workflow:
     python -m trader_agent.tools.history_db
@@ -27,6 +27,10 @@ CREATE TABLE IF NOT EXISTS fmv_history (
     fair_value_delta     REAL,
     previous_stars       INTEGER,
     current_stars        INTEGER,
+    previous_uncertainty TEXT,
+    current_uncertainty  TEXT,
+    previous_moat        TEXT,
+    current_moat         TEXT,
     previous_rating_date TEXT,
     current_rating_date  TEXT
 )
@@ -61,7 +65,7 @@ def build_db(sheet_id: str, db_path: str = DB_PATH) -> dict:
     for row in rows:
         cur.execute(
             """
-            INSERT INTO fmv_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO fmv_history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 (row.get("date") or "").strip() or None,
@@ -72,6 +76,10 @@ def build_db(sheet_id: str, db_path: str = DB_PATH) -> dict:
                 _safe_float(row.get("fair_value_delta")),
                 _safe_int(row.get("previous_stars")),
                 _safe_int(row.get("current_stars")),
+                (row.get("previous_uncertainty") or "").strip() or None,
+                (row.get("current_uncertainty") or "").strip() or None,
+                (row.get("previous_moat") or "").strip() or None,
+                (row.get("current_moat") or "").strip() or None,
                 (row.get("previous_rating_date") or "").strip() or None,
                 (row.get("current_rating_date") or "").strip() or None,
             ),
