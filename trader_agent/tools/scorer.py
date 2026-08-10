@@ -170,7 +170,6 @@ class ScoredStock:
     uncertainty: str
     stars: int
     ratings_date: Optional[str]
-    ratings_date_source: Optional[str] = None
     ratings_age_days: Optional[int]
     stale_rating: bool
     conviction: str
@@ -178,6 +177,7 @@ class ScoredStock:
     fmv_upgraded: bool
     price_change_pct: Optional[float]
     filter_reason: Optional[str]
+    ratings_date_source: Optional[str] = None
 
 
 def score_all(rows: list[dict]) -> list[ScoredStock]:
