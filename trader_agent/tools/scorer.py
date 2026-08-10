@@ -170,6 +170,7 @@ class ScoredStock:
     uncertainty: str
     stars: int
     ratings_date: Optional[str]
+    ratings_date_source: Optional[str] = None
     ratings_age_days: Optional[int]
     stale_rating: bool
     conviction: str
@@ -188,6 +189,7 @@ def score_all(rows: list[dict]) -> list[ScoredStock]:
         moat = str(row.get("moat", "")).strip() or None
         uncertainty = str(row.get("uncertainty", "")).strip() or None
         ratings_date = row.get("ratings_date") or row.get("ratingsdate") or None
+        ratings_date_source = str(row.get("ratings_date_source", "")).strip() or None
         raw_discount = row.get("discount") or row.get("price_to_fmv")
         discount = parse_discount(raw_discount)
         stars = parse_stars(row.get("stars"))
@@ -206,6 +208,7 @@ def score_all(rows: list[dict]) -> list[ScoredStock]:
                 fair_value=fair_value or 0.0, last_price=last_price or 0.0,
                 moat=moat or "", uncertainty=uncertainty or "",
                 stars=stars or 0, ratings_date=ratings_date,
+                ratings_date_source=ratings_date_source,
                 ratings_age_days=age, stale_rating=stale,
                 conviction="SKIP", sizing_hint="",
                 fmv_upgraded=False, price_change_pct=price_change_pct,
@@ -229,6 +232,7 @@ def score_all(rows: list[dict]) -> list[ScoredStock]:
             fair_value=fair_value or 0.0, last_price=last_price or 0.0,
             moat=moat or "", uncertainty=uncertainty or "",
             stars=stars or 0, ratings_date=ratings_date,
+                ratings_date_source=ratings_date_source,
             ratings_age_days=age, stale_rating=stale,
             conviction=conv, sizing_hint=hint,
             fmv_upgraded=False, price_change_pct=price_change_pct,
@@ -255,7 +259,8 @@ def _save_snapshot(scored: list) -> None:
         {"ticker": s.ticker, "company": s.company, "conviction": s.conviction,
          "stars": s.stars, "fmv": s.fair_value, "last_price": s.last_price,
          "pct_of_fmv": round(s.discount * 100, 1), "moat": s.moat,
-         "uncertainty": s.uncertainty, "ratings_date": s.ratings_date}
+         "uncertainty": s.uncertainty, "ratings_date": s.ratings_date,
+         "ratings_date_source": s.ratings_date_source}
         for s in scored
     ]
     (logs_dir / f"{today}_scores.json").write_text(

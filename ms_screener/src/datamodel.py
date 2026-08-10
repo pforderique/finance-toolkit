@@ -39,6 +39,7 @@ class OutColumn(str, Enum):
     SOURCE_FILE = "source_file"
     UNCERTAINTY = "uncertainty"
     RATINGS_DATE = "ratings_date"
+    RATINGS_DATE_SOURCE = "ratings_date_source"
 
     def computed(self) -> bool:
         """Whether this column is computed (not directly from input)."""

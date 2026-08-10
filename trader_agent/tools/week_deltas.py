@@ -209,13 +209,23 @@ def _diff_ticker(day: str, prev: dict, cur: dict) -> list[dict]:
     # --- analyst note refresh --------------------------------------------
     # Consumes ratings_date as published; does not parse or alter it.
     if p_rdate and c_rdate and str(p_rdate).strip() != str(c_rdate).strip():
+        # Where the new date came from, and whether FMV moved with it — the two
+        # things that decide how much weight a refresh deserves.
+        src = cur.get("ratings_date_source")
+        if fmv_moved:
+            how = "FMV revised"
+        elif src:
+            how = f"via {src}"
+        else:
+            how = "source unknown"
         changes.append(rec(
             kind="rating_refresh",
             label="Analyst note refreshed",
             arrow="↻", direction="flat",
             **{"from": p_rdate, "to": c_rdate},
             from_display=str(p_rdate), to_display=str(c_rdate), pct=None,
-            text=f"Analyst note refreshed ({p_rdate} → {c_rdate})",
+            source=src, how=how,
+            text=f"Rating date {p_rdate} → {c_rdate} ({how})",
         ))
 
     rating_moved = fmv_moved or stars_moved or moat_moved or unc_moved

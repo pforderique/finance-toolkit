@@ -149,6 +149,8 @@ def scrape_individual_pages(
                     result["uncertainty"] = pdf_result["uncertainty"]
                 if pdf_result.get("ratings_date"):
                     result["ratings_date"] = pdf_result["ratings_date"]
+                if pdf_result.get("ratings_date_source"):
+                    result["ratings_date_source"] = pdf_result["ratings_date_source"]
                 if pdf_result.get("ratings_dates"):
                     result["ratings_dates"] = pdf_result["ratings_dates"]
 
@@ -165,6 +167,7 @@ def scrape_individual_pages(
                 f"[green]• {ticker}:[/green]"
                 f" uncertainty={result.get('uncertainty', '—')},"
                 f" ratings_date={result.get('ratings_date', '—')}"
+                f" ({result.get('ratings_date_source', 'unknown')})"
             )
             breakdown = result.get("ratings_dates") or {}
             if breakdown:
@@ -449,8 +452,10 @@ def _extract_from_pdf(pdf_path: Path, ticker: str, perf_id: str) -> Optional[dic
             all_dates = _parse_pdf_dates(all_text)
             if all_dates:
                 result["ratings_date"] = max(all_dates.values())
-                # Keep the per-source breakdown for diagnostics; the sheet only
-                # consumes ratings_date (patch_screener_rows ignores extra keys).
+                # Which source won — the reader needs to know whether the date
+                # means "analyst reconfirmed FMV" or "analyst wrote something".
+                result["ratings_date_source"] = _pick_date_source(all_dates)
+                # Full per-source breakdown, kept for diagnostics only.
                 result["ratings_dates"] = all_dates
 
         return result if len(result) > 2 else None
@@ -536,6 +541,51 @@ def _parse_pdf_dates(text: str) -> dict[str, str]:
             _record(label, m.group(1))
 
     return dates
+
+
+# How each raw date label reads in the brief. Two buckets matter to the reader:
+# an analyst reconfirmed/changed the fair value, or an analyst wrote prose
+# without necessarily touching the FMV.
+_SOURCE_LABEL = {
+    "fair_value_as_of": "FMV confirmed",
+    "valuation_as_of": "FMV confirmed",
+    "analyst note": "analyst note",
+    "business strategy & outlook": "strategy section",
+    "business strategy and outlook": "strategy section",
+    "economic moat": "moat section",
+    "fair value and profit drivers": "FMV writeup",
+    "risk and uncertainty": "risk section",
+    "capital allocation": "capital allocation",
+    "bulls say": "bulls/bears",
+    "bears say": "bulls/bears",
+}
+
+# When several sources share the winning date, report the most meaningful one.
+_SOURCE_RANK = (
+    "analyst note",
+    "fair_value_as_of",
+    "valuation_as_of",
+    "fair value and profit drivers",
+    "economic moat",
+    "business strategy & outlook",
+    "business strategy and outlook",
+    "risk and uncertainty",
+    "capital allocation",
+    "bulls say",
+    "bears say",
+)
+
+
+def _pick_date_source(dates: dict) -> Optional[str]:
+    """Human-readable label for whichever source produced the winning date."""
+    if not dates:
+        return None
+    newest = max(dates.values())
+    winners = [k for k, v in dates.items() if v == newest]
+    for key in _SOURCE_RANK:
+        if key in winners:
+            return _SOURCE_LABEL.get(key, key)
+    return _SOURCE_LABEL.get(winners[0], winners[0])
 
 
 def _parse_pdf_ratings_date(text: str) -> Optional[str]:
