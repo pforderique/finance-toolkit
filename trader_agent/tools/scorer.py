@@ -250,9 +250,12 @@ def _save_snapshot(scored: list) -> None:
     logs_dir.mkdir(exist_ok=True)
     today = date.today().strftime("%Y-%m-%d")
     snapshot = [
+        # uncertainty + ratings_date are consumed as-published by week_deltas.py
+        # to detect uncertainty moves and analyst-note refreshes.
         {"ticker": s.ticker, "company": s.company, "conviction": s.conviction,
          "stars": s.stars, "fmv": s.fair_value, "last_price": s.last_price,
-         "pct_of_fmv": round(s.discount * 100, 1), "moat": s.moat}
+         "pct_of_fmv": round(s.discount * 100, 1), "moat": s.moat,
+         "uncertainty": s.uncertainty, "ratings_date": s.ratings_date}
         for s in scored
     ]
     (logs_dir / f"{today}_scores.json").write_text(

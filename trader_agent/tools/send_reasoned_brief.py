@@ -8,7 +8,7 @@ import json
 import os
 import smtplib
 import sys
-from datetime import date
+from datetime import date, datetime
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Optional
@@ -43,71 +43,24 @@ def _sizing_badge(hint: str) -> str:
     return _badge(label, color)
 
 
-def _whats_changed(today_data: dict, logs_dir: "Path") -> str:
-    today = today_data.get("date", date.today().strftime("%Y-%m-%d"))
-    scores_files = sorted(logs_dir.glob("*_scores.json"))
-    prev_scores_file = None
-    for f in scores_files:
-        if f.stem.split("_scores")[0] < today:
-            prev_scores_file = f
+def _week_changed(today_data: dict, logs_dir: "Path") -> str:
+    """7-day 'What Changed' feed — today first, then the rest of the week.
 
-    prev_briefs = sorted(logs_dir.glob("*_brief.json"))
-    prev_brief_file = None
-    for f in prev_briefs:
-        if f.stem.split("_brief")[0] < today:
-            prev_brief_file = f
+    Prefers the `week_changes` block embedded in the brief JSON (written by the
+    morning-brief agent). Falls back to computing it live from the daily score
+    snapshots so the section is never silently dropped.
+    """
+    from trader_agent.tools.week_deltas import build_week_deltas, render_html
 
-    changes = []
-
-    # Full-universe conviction changes (requires scores snapshot)
-    if prev_scores_file:
-        import json as _json
-        prev_scores = {r["ticker"]: r for r in _json.loads(prev_scores_file.read_text())}
-        today_scores_file = logs_dir / f"{today}_scores.json"
-        if today_scores_file.exists():
-            today_scores = {r["ticker"]: r for r in _json.loads(today_scores_file.read_text())}
-            tier = {"STRONG BUY": 0, "BUY": 1, "WATCH": 2, "TRIM": 3, "STRONG SELL": 4, "SELL": 5, "SKIP": 6}
-            for ticker, t in today_scores.items():
-                p = prev_scores.get(ticker)
-                if not p:
-                    if t["conviction"] not in ("SKIP",):
-                        changes.append(f"<b>{ticker}</b> new — {t['conviction']}")
-                    continue
-                if t["conviction"] != p["conviction"]:
-                    direction = "↑" if tier.get(t["conviction"], 9) < tier.get(p["conviction"], 9) else "↓"
-                    changes.append(f"<b>{ticker}</b> {p['conviction']} {direction} {t['conviction']}")
-                if p.get("stars") and t.get("stars") and t["stars"] != p["stars"]:
-                    arrow = "↑" if t["stars"] > p["stars"] else "↓"
-                    changes.append(f"<b>{ticker}</b> stars {p['stars']}→{t['stars']} {arrow}")
-                if p.get("fmv") and t.get("fmv") and p["fmv"] > 0 and t["fmv"] != p["fmv"]:
-                    fmv_chg = (t["fmv"] - p["fmv"]) / p["fmv"] * 100
-                    sign = "+" if fmv_chg > 0 else ""
-                    changes.append(f"<b>{ticker}</b> FMV {sign}{fmv_chg:.1f}% (${p['fmv']:,.0f}→${t['fmv']:,.0f})")
-
-    # New entries / dropped from actionable list (brief-level comparison)
-    if prev_brief_file:
-        import json as _json
-        prev_brief = _json.loads(prev_brief_file.read_text())
-        prev_actionable = {
-            s["ticker"]: s.get("_conviction", "BUY")
-            for s in prev_brief.get("strong_buys", []) + prev_brief.get("buy", [])
-        }
-        today_actionable = {
-            s["ticker"]: s.get("_conviction", "BUY")
-            for s in today_data.get("strong_buys", []) + today_data.get("buy", [])
-        }
-        for ticker in set(today_actionable) - set(prev_actionable):
-            if not any(ticker in c for c in changes):
-                changes.append(f"<b>{ticker}</b> entered actionable list ({today_actionable[ticker]})")
-        for ticker in set(prev_actionable) - set(today_actionable):
-            if not any(ticker in c for c in changes):
-                changes.append(f"<b>{ticker}</b> dropped from actionable list")
-
-    if not changes:
-        return "<p style='color:#888;font-size:13px'>No material changes from previous session.</p>"
-
-    items = "".join(f"<li style='margin-bottom:4px'>{c}</li>" for c in changes)
-    return f"<ul style='margin:0;padding-left:18px;font-size:13px;line-height:1.7'>{items}</ul>"
+    wd = today_data.get("week_changes")
+    if not isinstance(wd, dict) or "changes" not in wd:
+        today = today_data.get("date", date.today().strftime("%Y-%m-%d"))
+        try:
+            as_of = datetime.strptime(today, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            as_of = date.today()
+        wd = build_week_deltas(as_of=as_of, days=7, logs_dir=logs_dir)
+    return render_html(wd)
 
 
 def _signal_table(stocks: list[dict], emoji: str, header_color: str, sell_side: bool = False) -> str:
@@ -230,7 +183,7 @@ def build_html(data: dict, logs_dir: "Optional[Path]" = None) -> str:
     buy_table = _signal_table(buys, "🟢", "#0969da")
     sell_table = _signal_table(sells, "🔴", "#cf222e", sell_side=True)
     reasoning_html = _reasoning_section(strong_buys + buys)
-    changed_html = _whats_changed(data, logs_dir or _LOGS_DIR)
+    week_changed_html = _week_changed(data, logs_dir or _LOGS_DIR)
 
     if isinstance(stats, dict):
         sell_counts = ""
@@ -265,9 +218,11 @@ def build_html(data: dict, logs_dir: "Optional[Path]" = None) -> str:
     📊 Morning Brief — {today}
   </h2>
 
-  <div style="background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:12px 16px;margin-bottom:20px">
-    <h3 style="margin:0 0 8px 0;font-size:14px;color:#24292f">⚡ What's Changed</h3>
-    {changed_html}
+  <div style="background:#fff;border:2px solid #1a7f37;border-radius:6px;padding:14px 16px;margin-bottom:16px">
+    <h3 style="margin:0 0 2px 0;font-size:15px;color:#1a7f37">
+      ⚡ What Changed — last 7 days
+    </h3>
+    {week_changed_html}
   </div>
 
   <h3 style="color:#1a7f37;margin-bottom:8px">💚 Strong Buy</h3>

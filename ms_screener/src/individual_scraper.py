@@ -77,6 +77,7 @@ def scrape_individual_pages(
             + f", {len(skipped)} skipped (not stale)[/cyan]"
         )
 
+    fresh_pdf_tickers: set[str] = set()
     pending = []
     if len(qualifying) > max_stocks:
         pending = [s["ticker"] for s in qualifying[max_stocks:]]
@@ -112,6 +113,7 @@ def scrape_individual_pages(
             pdf_path = _download_pdf_with_retry(driver, ticker, download_dir, logger)
             if pdf_path:
                 _persist_pdf(pdf_path, ticker)
+                fresh_pdf_tickers.add(ticker)
                 console.print(f"[green]• PDF saved:  {ticker}[/green]")
             else:
                 console.print(f"[yellow]• No PDF for {ticker} after retries[/yellow]")
@@ -126,6 +128,19 @@ def scrape_individual_pages(
         perf_id = stock["perf_id"]
         result: dict = {"ticker": ticker, "perf_id": perf_id}
 
+        # A ticker only reaches Phase 2 because its data was judged stale, so a PDF
+        # left over from an earlier run is stale by construction. Reading a date out
+        # of it would republish a months-old date under a fresh last_scraped stamp —
+        # exactly the silent-staleness bug. Refuse, and report the ticker as failed.
+        if download_dir and ticker not in fresh_pdf_tickers:
+            failed.append(ticker)
+            console.print(
+                f"[red]• {ticker}: PDF download failed — refusing to reuse stale"
+                f" artifact for ratings_date[/red]"
+            )
+            logger.error(f"{ticker}: no fresh PDF this run; ratings_date not updated")
+            continue
+
         existing_pdfs = sorted(ARTIFACTS_DIR.glob(f"{ticker}_*.pdf"), reverse=True)
         if existing_pdfs:
             pdf_result = _extract_from_pdf(existing_pdfs[0], ticker, perf_id)
@@ -134,6 +149,8 @@ def scrape_individual_pages(
                     result["uncertainty"] = pdf_result["uncertainty"]
                 if pdf_result.get("ratings_date"):
                     result["ratings_date"] = pdf_result["ratings_date"]
+                if pdf_result.get("ratings_dates"):
+                    result["ratings_dates"] = pdf_result["ratings_dates"]
 
         # Fill uncertainty gap from HTML SVG data (reliable fallback)
         h = html_data.get(ticker, {})
@@ -149,6 +166,12 @@ def scrape_individual_pages(
                 f" uncertainty={result.get('uncertainty', '—')},"
                 f" ratings_date={result.get('ratings_date', '—')}"
             )
+            breakdown = result.get("ratings_dates") or {}
+            if breakdown:
+                parts = ", ".join(
+                    f"{k}={v}" for k, v in sorted(breakdown.items(), key=lambda kv: kv[1], reverse=True)
+                )
+                console.print(f"[dim]    dates: {parts}[/dim]")
         else:
             failed.append(ticker)
             console.print(f"[red]• No data extracted for {ticker}[/red]")
@@ -423,9 +446,12 @@ def _extract_from_pdf(pdf_path: Path, ticker: str, perf_id: str) -> Optional[dic
             if uncertainty:
                 result["uncertainty"] = uncertainty
 
-            ratings_date = _parse_pdf_ratings_date(all_text)
-            if ratings_date:
-                result["ratings_date"] = ratings_date
+            all_dates = _parse_pdf_dates(all_text)
+            if all_dates:
+                result["ratings_date"] = max(all_dates.values())
+                # Keep the per-source breakdown for diagnostics; the sheet only
+                # consumes ratings_date (patch_screener_rows ignores extra keys).
+                result["ratings_dates"] = all_dates
 
         return result if len(result) > 2 else None
     except Exception:
@@ -444,65 +470,81 @@ def _parse_pdf_uncertainty(text: str) -> Optional[str]:
     return None
 
 
-def _parse_pdf_ratings_date(text: str) -> Optional[str]:
-    """Extract the most recent analyst activity date from the PDF.
+# Sections whose Contents-table entry carries the date the analyst last wrote it.
+_CONTENTS_SECTIONS = (
+    "Analyst Note",
+    "Business Strategy & Outlook",
+    "Business Strategy and Outlook",
+    "Economic Moat",
+    "Fair Value and Profit Drivers",
+    "Risk and Uncertainty",
+    "Capital Allocation",
+    "Bulls Say",
+    "Bears Say",
+)
 
-    Primary: Analyst Note date from the Contents table — when an analyst last
-    published commentary, even if the FMV dollar value didn't change.
-    Fallback: Fair Value as of (quant-only reports with no analyst note).
-    Further fallback: Valuation as of (paragraph form used by some stocks).
+# Two date spellings appear in the reports: "16 Jul 2026" and "Jul 16, 2026".
+_DATE_ALT = r"(?:\d{1,2}\s+[A-Za-z]+\s+\d{4}|[A-Za-z]+\s+\d{1,2},\s+\d{4})"
+
+# Dates deliberately EXCLUDED from the freshness signal:
+#   "Report as of ..."        → when this PDF was generated (always ~today)
+#   "Total Return % as of"    → price data refresh (always ~today)
+#   "Last Close as of"        → price data refresh (always ~today)
+#   "Morningstar Rating QQQ…" → nightly quant star recompute (always ~today)
+#   "Assessment Undervalued…" → nightly quant recompute (always ~today)
+# Including any of these would mark every stock "fresh" and destroy the signal.
+
+
+def _parse_pdf_dates(text: str) -> dict[str, str]:
     """
-    # Contents-table section patterns — date in parentheses next to section name.
-    # These are the analyst's last-written dates and are the most reliable signal.
-    _CONTENTS_SECTIONS = (
-        "Analyst Note",
-        "Business Strategy & Outlook",
-        "Business Strategy and Outlook",
-        "Economic Moat",
-        "Fair Value and Profit Drivers",
-        "Risk and Uncertainty",
-        "Capital Allocation",
-        "Bulls Say",
-    )
-    _sec = "|".join(re.escape(s) for s in _CONTENTS_SECTIONS)
+    Collect every analyst-authored date in the report, keyed by source label.
 
-    # 1. Contents-table section entries — find ALL matches, return the LATEST.
-    #    Main sections share one date; Analyst Notes Archive may have newer entries.
-    section_dates = []
-    for pat in (
-        rf"(?:{_sec})\s*\((\d{{1,2}}\s+[A-Za-z]+\s+\d{{4}})\)",
-        rf"(?:{_sec})\s*\(([A-Za-z]+\s+\d{{1,2}},\s+\d{{4}})\)",
-    ):
-        for m in re.finditer(pat, text, re.IGNORECASE):
-            normalized = _normalize_date(m.group(1))
-            if normalized:
-                section_dates.append(normalized)
-    if section_dates:
-        return max(section_dates)
+    Only dates belonging to the SUBJECT company are collected. Morningstar reports
+    embed peer-comparison panels that repeat "Fair Value as of <date>" for competing
+    tickers; those live past page 1, so subject-level "as of" dates are read from the
+    page-1 header block only. Contents/byline section dates are unambiguous and are
+    collected from the whole document (the Analyst Notes Archive can hold newer ones).
+    """
+    dates: dict[str, str] = {}
 
-    # 2. "Fair Value as of" — find ALL occurrences and take the latest.
-    #    Reports can have an old-FMV chart footnote AND the current FMV; latest wins.
-    fmv_dates = []
-    for pat in (
-        r"Fair Value as of\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})",
-        r"Fair Value as of\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})",
-    ):
-        for m in re.finditer(pat, text, re.IGNORECASE):
-            normalized = _normalize_date(m.group(1))
-            if normalized:
-                fmv_dates.append(normalized)
-    if fmv_dates:
-        return max(fmv_dates)
+    def _record(label: str, raw: str) -> None:
+        normalized = _normalize_date(raw)
+        if not normalized:
+            return
+        # Keep the newest value seen for a given label (e.g. archive analyst notes).
+        if label not in dates or normalized > dates[label]:
+            dates[label] = normalized
 
-    # 3. "Valuation as of" — paragraph form used by some stocks
-    for pat in (
-        r"Valuation as of\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})",
-        r"Valuation as of\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})",
+    sec_alt = "|".join(re.escape(s) for s in _CONTENTS_SECTIONS)
+
+    # Contents-table entries: "Analyst Note (16 Jul 2026)"
+    for m in re.finditer(rf"({sec_alt})\s*(?:/\s*Bears Say\s*)?\(({_DATE_ALT})\)", text, re.IGNORECASE):
+        _record(m.group(1).lower(), m.group(2))
+
+    # Body bylines: "Analyst Note Phelix Lee, Senior Equity Analyst, 16 Jul 2026"
+    for m in re.finditer(rf"({sec_alt})\s+[^\n]{{0,90}}?,\s*({_DATE_ALT})", text, re.IGNORECASE):
+        _record(m.group(1).lower(), m.group(2))
+
+    # Subject-company "as of" dates — page-1 header block only, first occurrence wins.
+    head = text[:4000]
+    for label, pattern in (
+        ("fair_value_as_of", rf"Fair Value as of\s+({_DATE_ALT})"),
+        ("valuation_as_of", rf"Valuation as of\s+({_DATE_ALT})"),
     ):
-        m = re.search(pat, text, re.IGNORECASE)
+        m = re.search(pattern, head, re.IGNORECASE)
         if m:
-            normalized = _normalize_date(m.group(1))
-            if normalized:
-                return normalized
+            _record(label, m.group(1))
 
-    return None
+    return dates
+
+
+def _parse_pdf_ratings_date(text: str) -> Optional[str]:
+    """
+    Most recent analyst activity date in the report (max across all sources).
+
+    Any analyst touch counts as freshness: a new analyst note, a rewritten moat
+    section, or a reconfirmed fair value. Taking the max means a stock is only
+    "stale" when no analyst has touched any part of the report.
+    """
+    dates = _parse_pdf_dates(text)
+    return max(dates.values()) if dates else None

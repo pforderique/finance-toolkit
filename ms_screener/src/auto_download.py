@@ -28,6 +28,15 @@ LOGIN_URL = "https://ezproxy.spl.org/login?url=https://research.morningstar.com/
 DOWNLOAD_WAIT_SECONDS = 90
 PAGE_WAIT_SECONDS = 30
 
+# The compare page is a Vue SPA: the "Download CSV" button is present and
+# element_to_be_clickable long before the grid data has loaded. Clicking it too
+# early is a silent no-op — no file is ever produced. Wait for the grid to
+# actually render (and stop growing) before clicking, and retry the click.
+GRID_ROW_SELECTOR = ".compare__table-row"
+GRID_WAIT_SECONDS = 45
+DOWNLOAD_CLICK_ATTEMPTS = 3
+DOWNLOAD_ATTEMPT_WAIT_SECONDS = 30
+
 USERNAME_KEYWORDS = ("user",)  # ("barcode", "user", "username", "card")
 PIN_KEYWORDS = ("pass",)  # ("pin", "password", "passcode", "pass")
 DOWNLOAD_BUTTON_SELECTORS = (
@@ -92,11 +101,35 @@ def _do_downloads(driver: Chrome, links: list[str], download_dir: Path) -> list[
         console.print(f"[cyan]• Fetching link {idx}/{len(links)}[/cyan]")
         driver.get(link)
         _wait_for_page_ready(driver)
-        button = _locate_download_button(driver)
+        _wait_for_compare_grid(driver)
 
-        before = _existing_csv_names(download_dir)
-        button.click()
-        new_file = _wait_for_new_csv(download_dir, before)
+        new_file: Optional[Path] = None
+        for attempt in range(1, DOWNLOAD_CLICK_ATTEMPTS + 1):
+            button = _locate_download_button(driver)
+            before = _existing_csv_names(download_dir)
+            try:
+                button.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", button)
+
+            new_file = _wait_for_new_csv(
+                download_dir, before,
+                timeout=DOWNLOAD_ATTEMPT_WAIT_SECONDS,
+                raise_on_timeout=False,
+            )
+            if new_file:
+                break
+            console.print(
+                f"[yellow]  → No CSV after click {attempt}/{DOWNLOAD_CLICK_ATTEMPTS};"
+                f" waiting for grid and retrying[/yellow]"
+            )
+            _wait_for_compare_grid(driver)
+
+        if new_file is None:
+            raise AutoDownloadError(
+                "Timed out waiting for Morningstar CSV to finish downloading"
+                f" (link {idx}/{len(links)}, {DOWNLOAD_CLICK_ATTEMPTS} click attempts)."
+            )
 
         target = download_dir / f"morningstar_compare_{idx:03d}.csv"
         new_file.rename(target)
@@ -254,16 +287,56 @@ def _locate_download_button(driver: Chrome) -> WebElement:
     ) from last_exc
 
 
+def _wait_for_compare_grid(driver: Chrome) -> None:
+    """
+    Block until the compare grid has rendered and its row count has stopped growing.
+
+    Without this the 'Download CSV' click lands on an empty SPA shell and silently
+    produces no file — the cause of the long-running scheduled-job failures.
+    """
+    deadline = time.time() + GRID_WAIT_SECONDS
+    stable_reads = 0
+    last_count = -1
+
+    while time.time() < deadline:
+        try:
+            count = len(driver.find_elements(By.CSS_SELECTOR, GRID_ROW_SELECTOR))
+        except Exception:
+            count = 0
+
+        if count > 0 and count == last_count:
+            stable_reads += 1
+            if stable_reads >= 2:
+                return
+        else:
+            stable_reads = 0
+
+        last_count = count
+        time.sleep(1)
+
+    console.print(
+        "[yellow]  → Compare grid did not settle within"
+        f" {GRID_WAIT_SECONDS}s; clicking anyway[/yellow]"
+    )
+
+
 def _existing_csv_names(download_dir: Path) -> set[str]:
     return {path.name for path in download_dir.glob("*.csv")}
 
 
-def _wait_for_new_csv(download_dir: Path, previous: set[str]) -> Path:
-    deadline = time.time() + DOWNLOAD_WAIT_SECONDS
+def _wait_for_new_csv(
+    download_dir: Path,
+    previous: set[str],
+    timeout: Optional[float] = None,
+    raise_on_timeout: bool = True,
+) -> Optional[Path]:
+    deadline = time.time() + (DOWNLOAD_WAIT_SECONDS if timeout is None else timeout)
     while time.time() < deadline:
         for path in download_dir.glob("*.csv"):
             if path.name in previous:
                 continue
             return path
         time.sleep(1)
-    raise AutoDownloadError("Timed out waiting for Morningstar CSV to finish downloading.")
+    if raise_on_timeout:
+        raise AutoDownloadError("Timed out waiting for Morningstar CSV to finish downloading.")
+    return None

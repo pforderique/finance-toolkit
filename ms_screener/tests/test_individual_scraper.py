@@ -12,6 +12,7 @@ from ms_screener.src.individual_scraper import (
     _filter_stale_stocks,
     _parse_pdf_uncertainty,
     _parse_pdf_ratings_date,
+    _parse_pdf_dates,
 )
 
 
@@ -236,10 +237,55 @@ class TestPdfDateParsing:
         )
         assert _parse_pdf_ratings_date(text) == "2026-05-15"
 
-    def test_fair_value_latest_wins_over_chart_footnote(self):
-        """When only Fair Value as of present, latest date wins over old chart footnote."""
+    def test_fair_value_uses_subject_company_only(self):
+        """
+        Only the page-1 'Fair Value as of' belongs to the subject company.
+
+        Morningstar reports embed peer-comparison panels that repeat
+        'Fair Value as of <date>' for competing tickers, always past page 1.
+        Taking the max across all of them leaked a competitor's date onto the
+        subject stock; the first (page-1 header) occurrence is authoritative.
+        """
         text = (
             "Fair Value as of 3 Feb 2026 20:13, UTC.\n"
-            "Fair Value as of 16 May 2026 02:05, UTC\n"
+            + ("filler\n" * 500)
+            + "Fair Value as of 16 May 2026 02:05, UTC\n"  # peer panel, must be ignored
         )
-        assert _parse_pdf_ratings_date(text) == "2026-05-16"
+        assert _parse_pdf_ratings_date(text) == "2026-02-03"
+
+    def test_max_across_all_analyst_sections(self):
+        """The newest analyst-authored date wins, whichever section it came from."""
+        text = (
+            "Analyst Note (3 Aug 2026)\n"
+            "Business Strategy & Outlook (18 Mar 2026)\n"
+            "Economic Moat (21 Jul 2026)\n"
+            "Fair Value as of 21 Jul 2026 16:46, UTC.\n"
+        )
+        assert _parse_pdf_ratings_date(text) == "2026-08-03"
+
+    def test_ignores_daily_quant_refresh_dates(self):
+        """Nightly star/assessment/price refreshes are ~today and must not count."""
+        text = (
+            "Report as of 7 Aug 2026 03:27, UTC\n"
+            "Total Return % as of 06 Aug 2026. Last Close as of 06 Aug 2026.\n"
+            "Morningstar Rating QQQQ6 Aug 2026 05:00, UTC\n"
+            "Assessment Undervalued6 Aug 2026\n"
+            "Analyst Note (18 Mar 2026)\n"
+        )
+        assert _parse_pdf_ratings_date(text) == "2026-03-18"
+
+    def test_analyst_note_byline_without_parentheses(self):
+        """Body bylines carry dates too, and can be newer than the Contents entry."""
+        text = (
+            "Analyst Note (16 Jul 2026)\n"
+            "Analyst Note Phelix Lee, Senior Equity Analyst, 31 Jul 2026\n"
+        )
+        assert _parse_pdf_ratings_date(text) == "2026-07-31"
+
+    def test_dates_breakdown_is_available(self):
+        """Individual per-source dates are kept alongside the max."""
+        dates = _parse_pdf_dates(
+            "Analyst Note (3 Aug 2026)\nEconomic Moat (21 Jul 2026)\n"
+        )
+        assert dates["analyst note"] == "2026-08-03"
+        assert dates["economic moat"] == "2026-07-21"

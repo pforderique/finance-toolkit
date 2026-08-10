@@ -146,6 +146,45 @@ def run_scrape_only(cfg: RunConfig) -> None:
     print_warnings(warnings)
 
 
+def _screener_stocks(cfg: RunConfig, collected: List[dict]) -> List[dict]:
+    """Build the individual-scrape stock list from collected_data + the Screener tab."""
+    try:
+        screener_rows = io_layer.read_sheet_as_dicts(cfg.sheet_id, cfg.snapshot_tab)
+        by_ticker = {(r.get(OutColumn.TICKER) or "").upper(): r for r in screener_rows}
+    except Exception:
+        by_ticker = {}
+        console.print("[yellow]Warning: could not read Screener tab — staleness checks degraded[/yellow]")
+
+    return [
+        {
+            "ticker": row[InColumn.TICKER],
+            "perf_id": row[InColumn.PERFORMANCE_ID],
+            "ratings_date": by_ticker.get(row[InColumn.TICKER], {}).get(OutColumn.RATINGS_DATE),
+            "uncertainty": by_ticker.get(row[InColumn.TICKER], {}).get(OutColumn.UNCERTAINTY),
+            "moat": by_ticker.get(row[InColumn.TICKER], {}).get(OutColumn.MOAT),
+        }
+        for row in collected
+        if row.get(InColumn.PERFORMANCE_ID)
+    ]
+
+
+def _scrape_with_driver(cfg: RunConfig, driver, download_dir: Path, collected: List[dict]) -> None:
+    """Run the individual page scrape with an already-authenticated driver and patch the sheet."""
+    console.rule("[bold]Individual Page Scrape (CSV-independent)[/bold]")
+    stocks = _screener_stocks(cfg, collected)
+    scrape_result = individual_scraper.scrape_individual_pages(
+        driver, stocks,
+        max_stocks=cfg.scrape_max_stocks,
+        rate_limit_seconds=cfg.scrape_rate_limit,
+        download_dir=download_dir,
+        tickers=cfg.scrape_tickers or None,
+    )
+    if scrape_result.updated and cfg.sheet_id and not cfg.dry_run:
+        patched = io_layer.patch_screener_rows(
+            cfg.sheet_id, cfg.snapshot_tab, scrape_result.updated)
+        console.print(f"[green]• Screener tab patched:[/green] {patched} cell(s) updated")
+
+
 def run_workflow(cfg: RunConfig) -> RunResult:
     """Run the end-to-end Morningstar workflow based on the provided configuration."""
 
@@ -207,10 +246,31 @@ def run_workflow(cfg: RunConfig) -> RunResult:
                 driver = auto_download.build_driver(download_dir, headless=cfg.auto_headless)
                 try:
                     auto_download.perform_login(driver, username, pin)
+                except auto_download.AutoDownloadError as exc:
+                    driver.quit()
+                    raise RuntimeError(str(exc)) from exc
+
+                try:
                     paths = auto_download.download_compare_csvs(
                         links_path, driver=driver, download_dir=download_dir)
                 except auto_download.AutoDownloadError as exc:
-                    raise RuntimeError(str(exc)) from exc
+                    # The CSV export failing must NOT take the ratings-date refresh
+                    # down with it. Dates are the highest-value signal in the brief;
+                    # a dead CSV step used to silently freeze them for weeks.
+                    console.print(
+                        f"[red]• CSV download failed: {exc}[/red]\n"
+                        "[yellow]• Falling back to individual scrape so ratings dates"
+                        " still refresh (snapshot/FMV update skipped)[/yellow]"
+                    )
+                    try:
+                        _scrape_with_driver(cfg, driver, download_dir, collected)
+                    finally:
+                        driver.quit()
+                        driver = None
+                    raise RuntimeError(
+                        f"{exc} Ratings dates were refreshed via the individual scrape,"
+                        " but the snapshot/FMV update did not run."
+                    ) from exc
             else:
                 paths = auto_download.download_compare_csvs(
                     links_path, headless=cfg.auto_headless)
