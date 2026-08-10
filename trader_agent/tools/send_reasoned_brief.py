@@ -166,7 +166,24 @@ def _reasoning_section(stocks: list[dict]) -> str:
     return items
 
 
-def build_html(data: dict, logs_dir: "Optional[Path]" = None) -> str:
+def build_html(
+    data: dict,
+    logs_dir: "Optional[Path]" = None,
+    health: "Optional[dict]" = None,
+) -> str:
+    """Render the brief.
+
+    `health` is a report from `trader_agent.tools.health.check_health`. When it
+    flags a problem, a red staleness banner is rendered ABOVE the "What Changed"
+    box — the brief must never look normal while the data behind it is frozen.
+    Falls back to the `health` block embedded in the brief JSON.
+    """
+    from trader_agent.tools.health import render_banner_html
+
+    if health is None:
+        health = data.get("health")
+    banner_html = render_banner_html(health)
+
     today = data.get("date", date.today().strftime("%Y-%m-%d"))
     strong_buys = data.get("strong_buys", [])
     buys = data.get("buy", [])
@@ -217,7 +234,7 @@ def build_html(data: dict, logs_dir: "Optional[Path]" = None) -> str:
   <h2 style="border-bottom:2px solid #1a7f37;padding-bottom:8px;color:#1a7f37">
     📊 Morning Brief — {today}
   </h2>
-
+{banner_html}
   <div style="background:#fff;border:2px solid #1a7f37;border-radius:6px;padding:14px 16px;margin-bottom:16px">
     <h3 style="margin:0 0 2px 0;font-size:15px;color:#1a7f37">
       ⚡ What Changed — last 7 days
@@ -250,6 +267,41 @@ def build_html(data: dict, logs_dir: "Optional[Path]" = None) -> str:
 _LOGS_DIR = Path(__file__).parent.parent / "logs"
 
 
+def _run_health_check(today: str) -> dict:
+    """Evaluate pipeline freshness for the banner.
+
+    If the health check itself blows up we return a synthetic warning report
+    rather than None — a brief that silently drops its own smoke detector is the
+    exact failure mode this whole thing exists to prevent.
+    """
+    from trader_agent.tools.health import check_health
+
+    try:
+        as_of = datetime.strptime(today, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        as_of = date.today()
+
+    try:
+        return check_health(as_of=as_of, logs_dir=_LOGS_DIR)
+    except Exception as exc:  # noqa: BLE001 - never block the brief
+        message = (
+            f"Health check failed to run ({exc.__class__.__name__}: {exc}) — "
+            "freshness of this brief is UNVERIFIED."
+        )
+        return {
+            "as_of": as_of.isoformat(),
+            "status": "warn",
+            "alarm": True,
+            "headline": message,
+            "problems": [{"check": "health_check", "severity": "warn", "message": message}],
+            "checks": {
+                "scrape_freshness": {},
+                "ratings_freshness": {},
+                "last_run": {"log_path": str(Path.home() / "Library/Logs/ms_screener.log")},
+            },
+        }
+
+
 def _archive_brief(data: dict, today: str) -> None:
     _LOGS_DIR.mkdir(exist_ok=True)
     dest = _LOGS_DIR / f"{today}_brief.json"
@@ -262,16 +314,22 @@ def main() -> None:
         sys.exit(1)
 
     data = json.loads(open(sys.argv[1], encoding="utf-8").read())
-    html_body = build_html(data, _LOGS_DIR)
-
     today = data.get("date", date.today().strftime("%Y-%m-%d"))
+
+    health = _run_health_check(today)
+    if health:
+        data["health"] = health
+    html_body = build_html(data, _LOGS_DIR, health=health)
+
     _archive_brief(data, today)
     username = os.environ["EMAIL_USERNAME"]
     password = os.environ["EMAIL_PASSWORD"]
     recipients = [e.strip() for e in os.environ.get("ALERT_EMAILS", username).split(",")]
 
+    from trader_agent.tools.health import subject_prefix
+
     msg = EmailMessage()
-    msg["Subject"] = f"📈 Morning Brief — {today}"
+    msg["Subject"] = f"{subject_prefix(health)}📈 Morning Brief — {today}"
     msg["From"] = username
     msg["To"] = ", ".join(recipients)
     msg.set_content("Open in an HTML-capable email client to view the morning brief.")

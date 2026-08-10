@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from ms_screener.src.config import RunConfig
 from ms_screener.src.logging_setup import configure_logging, console
+from ms_screener.src.notify import notify_run_failure
 from ms_screener.src.workflow import run_workflow, run_scrape_only
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
@@ -97,6 +98,13 @@ def run(
             run_workflow(cfg)
     except RuntimeError as exc:
         console.print(f"[red]Error:[/red] {exc}")
+        # Fail loud: a scheduled run that dies must reach the user's inbox, not
+        # just ~/Library/Logs/ms_screener.log (which nobody reads).
+        notify_run_failure(exc, command="ms_screener.main")
+        raise typer.Exit(code=2) from exc
+    except Exception as exc:  # noqa: BLE001 - unexpected crashes must alert too
+        console.print(f"[red]Error:[/red] unexpected failure: {exc}")
+        notify_run_failure(exc, command="ms_screener.main")
         raise typer.Exit(code=2) from exc
 
 
