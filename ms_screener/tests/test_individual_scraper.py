@@ -67,27 +67,27 @@ class TestStaleness:
         assert _is_stale("", 1) is True
 
     def test_fresh_date_not_stale_tier1(self):
-        """Fresh date (<30 days) not stale for Tier 1."""
+        """Fresh date (<14 days) not stale for Tier 1."""
         today = datetime.now().date()
-        recent = (today - timedelta(days=20)).strftime("%Y-%m-%d")
+        recent = (today - timedelta(days=10)).strftime("%Y-%m-%d")
         assert _is_stale(recent, 1) is False
 
     def test_stale_date_at_boundary_tier1(self):
-        """At exactly 31 days, considered stale for Tier 1 (threshold 30)."""
+        """At 15 days, considered stale for Tier 1 (threshold 14)."""
         today = datetime.now().date()
-        old = (today - timedelta(days=31)).strftime("%Y-%m-%d")
+        old = (today - timedelta(days=15)).strftime("%Y-%m-%d")
         assert _is_stale(old, 1) is True
 
     def test_stale_date_tier2_boundary(self):
-        """At 91 days, stale for Tier 2 (threshold 90)."""
+        """At 31 days, stale for Tier 2 (threshold 30)."""
         today = datetime.now().date()
-        old = (today - timedelta(days=91)).strftime("%Y-%m-%d")
+        old = (today - timedelta(days=31)).strftime("%Y-%m-%d")
         assert _is_stale(old, 2) is True
 
     def test_stale_date_tier3_boundary(self):
-        """At 181 days, stale for Tier 3 (threshold 180)."""
+        """At 61 days, stale for Tier 3 (threshold 60)."""
         today = datetime.now().date()
-        old = (today - timedelta(days=181)).strftime("%Y-%m-%d")
+        old = (today - timedelta(days=61)).strftime("%Y-%m-%d")
         assert _is_stale(old, 3) is True
 
     def test_date_formats(self):
@@ -127,9 +127,9 @@ class TestFilterStaleStocks:
         assert len(skipped) == 0
 
     def test_fresh_wide_low_skipped_tier3(self):
-        """Fresh Wide+Low stock skipped (Tier 3, >180 days threshold)."""
+        """Fresh Wide+Low stock skipped (Tier 3, >60 days threshold)."""
         today = datetime.now().date()
-        fresh = (today - timedelta(days=100)).strftime("%Y-%m-%d")
+        fresh = (today - timedelta(days=40)).strftime("%Y-%m-%d")
         stocks = [
             {"ticker": "AAPL", "perf_id": "0P000000AA", "ratings_date": fresh, "moat": "Wide", "uncertainty": "Low"},
         ]
@@ -138,9 +138,9 @@ class TestFilterStaleStocks:
         assert len(skipped) == 1
 
     def test_stale_wide_low_qualifies_tier3(self):
-        """Stale Wide+Low stock qualifies (Tier 3, >180 days threshold)."""
+        """Stale Wide+Low stock qualifies (Tier 3, >60 days threshold)."""
         today = datetime.now().date()
-        old = (today - timedelta(days=200)).strftime("%Y-%m-%d")
+        old = (today - timedelta(days=80)).strftime("%Y-%m-%d")
         stocks = [
             {"ticker": "AAPL", "perf_id": "0P000000AA", "ratings_date": old, "moat": "Wide", "uncertainty": "Low"},
         ]

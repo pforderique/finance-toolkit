@@ -41,11 +41,11 @@ class TestConvictionTier:
     def test_3star_stale_is_watch(self):
         assert conviction_tier(3, stale=True) == "WATCH"
 
-    def test_2star_is_skip(self):
-        assert conviction_tier(2, stale=False) == "SKIP"
+    def test_2star_is_sell(self):
+        assert conviction_tier(2, stale=False) == "SELL"
 
-    def test_1star_is_skip(self):
-        assert conviction_tier(1, stale=False) == "SKIP"
+    def test_1star_is_strong_sell(self):
+        assert conviction_tier(1, stale=False) == "STRONG SELL"
 
     def test_none_star_is_skip(self):
         assert conviction_tier(None, stale=False) == "SKIP"
@@ -69,13 +69,16 @@ class TestPassesPrefilter:
     def _row(self, stars, discount):
         return {"stars": str(stars), "discount": str(discount)}
 
-    def test_1star_excluded(self):
+    # 1-2 star names are sell signals — they pass the filter regardless of discount.
+    def test_1star_passes_as_sell_signal(self):
         passed, reason = passes_prefilter(self._row(1, 0.70))
-        assert not passed
+        assert passed
+        assert reason is None
 
-    def test_2star_excluded(self):
+    def test_2star_passes_as_sell_signal(self):
         passed, reason = passes_prefilter(self._row(2, 0.65))
-        assert not passed
+        assert passed
+        assert reason is None
 
     def test_3star_passes(self):
         passed, reason = passes_prefilter(self._row(3, 0.85))
