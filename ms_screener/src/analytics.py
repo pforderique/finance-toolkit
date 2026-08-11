@@ -4,7 +4,6 @@ from datetime import date
 from typing import List, Optional
 
 from ms_screener.src import datamodel
-from ms_screener.src.transform import round_to
 
 InColumn = datamodel.InColumn
 OutColumn = datamodel.OutColumn
@@ -31,6 +30,10 @@ def discount(price: Optional[float], fair_value: Optional[float]) -> Optional[fl
     """Calculate the discount to fair value as a decimal
     (e.g., 0.25 for 25% undervalued). Return None if inputs are invalid.
     """
+    # Imported lazily: transform imports analytics, so a module-level import here
+    # makes `import ms_screener.src.transform` fail with a circular-import error.
+    from ms_screener.src.transform import round_to
+
     if price is None or fair_value in (None, 0):
         return None
     try:

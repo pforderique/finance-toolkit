@@ -36,6 +36,54 @@ FMV_CHANGE_HEADERS = [
     "current_rating_date",
 ]
 
+# Header layout used before commit 479ea50 inserted the uncertainty/moat columns.
+# Rows written under it only have 10 columns; the rating dates sit where the
+# uncertainty columns live today.
+LEGACY_FMV_CHANGE_HEADERS = [
+    "date",
+    OutColumn.TICKER,
+    OutColumn.COMPANY,
+    "previous_fair_value",
+    "current_fair_value",
+    "fair_value_delta",
+    "previous_stars",
+    "current_stars",
+    "previous_rating_date",
+    "current_rating_date",
+]
+
+def map_data_change_row(cells: list) -> dict:
+    """Map one raw Data_Changes row to a dict, choosing the layout by row width.
+
+    Rows written before commit 479ea50 have 10 cells and carry their rating dates in
+    positions 8-9; rows written after have 14 cells with uncertainty/moat inserted at
+    8-11. Width disambiguates them unambiguously, so this is correct whether or not the
+    sheet's header row has been repaired. Missing columns come back as None.
+    """
+
+    headers = (LEGACY_FMV_CHANGE_HEADERS
+               if len(cells) <= len(LEGACY_FMV_CHANGE_HEADERS)
+               else FMV_CHANGE_HEADERS)
+    record: dict = {column: None for column in FMV_CHANGE_HEADERS}
+    for idx, column in enumerate(headers):
+        if idx >= len(cells):
+            break
+        value = cells[idx]
+        value = value.strip() if isinstance(value, str) else value
+        record[column] = value if value != "" else None
+    return record
+
+
+def read_data_change_rows(sheet_id: str, tab: str) -> list[dict]:
+    """Read the Data_Changes tab, mapping every row onto the current column layout."""
+
+    values = io_layer.read_sheet_values(sheet_id, tab)
+    return [
+        map_data_change_row(row)
+        for row in values[1:]
+        if any(str(cell).strip() for cell in row)
+    ]
+
 
 def normalize_collected_data(rows: Iterable[dict]) -> tuple[list[dict], list[str]]:
     """Normalize and validate collected data rows."""

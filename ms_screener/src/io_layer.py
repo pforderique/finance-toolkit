@@ -287,11 +287,78 @@ def snapshot_path(out_dir: Path) -> Path:
     return out_dir / "snapshot.csv"
 
 
+def read_sheet_values(sheet_id: str, tab: str) -> List[List[str]]:
+    """Return the raw cell grid of a tab (including the header row), stripped."""
+
+    service = _get_sheets_service()
+    try:
+        response = (
+            service.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range=f"{tab}!A1:Z")
+            .execute()
+        )
+    except Exception as exc:  # pragma: no cover - network call
+        raise RuntimeError(f"Failed to read {tab} tab: {exc}") from exc
+
+    return [
+        [str(cell).strip() for cell in row]
+        for row in response.get("values", [])
+    ]
+
+
+def read_sheet_header(sheet_id: str, tab: str) -> List[str]:
+    """Return the raw header row (row 1) of a tab, stripped. Empty list if the tab is empty."""
+
+    service = _get_sheets_service()
+    try:
+        response = (
+            service.spreadsheets()
+            .values()
+            .get(spreadsheetId=sheet_id, range=f"{tab}!1:1")
+            .execute()
+        )
+    except Exception as exc:  # pragma: no cover - network call
+        raise RuntimeError(f"Failed to read header row of {tab} tab: {exc}") from exc
+
+    values = response.get("values", [])
+    if not values:
+        return []
+    return [str(cell).strip() for cell in values[0]]
+
+
+def is_header_subsequence(existing: Sequence[str], expected: Sequence[str]) -> bool:
+    """True if `existing` is an ordered subsequence of `expected`.
+
+    That is the signature of columns having been *added* to the writer's header list
+    (possibly in the middle) without the sheet's header row being updated. Any other
+    difference (renames, reordering, removals) is not safely repairable.
+    """
+
+    if not existing:
+        return False
+    it = iter(expected)
+    return all(any(name == candidate for candidate in it) for name in existing)
+
+
+def _write_header_row(service: Resource, sheet_id: str, tab: str, headers: Sequence[str]) -> None:
+    """Overwrite row 1 of a tab with `headers`. Touches the header row only."""
+    service.spreadsheets().values().update(
+        spreadsheetId=sheet_id,
+        range=f"{tab}!A1",
+        valueInputOption="RAW",
+        body={"values": [list(headers)]},
+    ).execute()
+
+
 def append_to_sheet(sheet_id: str, tab: str, rows: List[dict], headers: Optional[Sequence[str]] = None) -> None:
     """Append rows to a Google Sheet tab (append-only, never overwrites).
 
     - If tab is empty: write headers (if provided), then data rows
     - If tab has data: append data rows only
+    - If the tab's header row has drifted behind the writer's headers (columns were
+      added to the writer since the header row was written), the header row is
+      repaired in place so appended values stay under the right column names.
     - Uses insertDataOption="INSERT_ROWS" for append semantics
     """
 
@@ -316,6 +383,21 @@ def append_to_sheet(sheet_id: str, tab: str, rows: List[dict], headers: Optional
     body_values: List[List] = []
     for row in rows:
         body_values.append([_format_sheet_value(row.get(column)) for column in resolved_headers])
+
+    # Guard against header drift: the header row is only ever written when the tab is
+    # empty, so adding columns to `headers` later would silently write values under the
+    # wrong column names (and drop the overflow columns on read).
+    if existing_rows:
+        existing_header = read_sheet_header(sheet_id, tab)
+        if existing_header and list(existing_header) != list(resolved_headers):
+            if is_header_subsequence(existing_header, resolved_headers):
+                _write_header_row(service, sheet_id, tab, resolved_headers)
+            else:
+                raise RuntimeError(
+                    f"Header row of {tab} tab does not match the expected columns and cannot be "
+                    f"repaired automatically. Sheet has {existing_header}, writer expects "
+                    f"{list(resolved_headers)}. Fix the header row manually before appending."
+                )
 
     # Determine append position
     if not existing_rows:
