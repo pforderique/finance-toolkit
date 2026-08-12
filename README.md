@@ -28,11 +28,15 @@ cp .env.example .env  # or edit .env directly
 |---|---|---|
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | all | Path to GCP service account JSON |
 | `SHEET_ID` | ms_screener, trader_agent | Morningstar Screener Google Sheet ID |
-| `FIDELITY_SHEET_ID` | fidelity | Portfolio Tracker Google Sheet ID |
 | `MORNINGSTAR_API_KEYS` | ms_screener | Comma-separated RapidAPI keys |
 | `EMAIL_USERNAME` / `EMAIL_PASSWORD` | ms_screener | Alert email credentials |
 | `ALERT_EMAILS` | ms_screener | Comma-separated recipient addresses |
 | `SPL_BARCODE` / `SPL_PIN` | ms_screener | Seattle Public Library card (Morningstar access) |
+
+`fidelity` no longer reads a spreadsheet id from `.env` — its target
+spreadsheet/tab/table and account mappings live in
+[`fidelity/settings.toml`](./fidelity/settings.toml) instead (`--settings`
+to override the path). See [fidelity/README.md](./fidelity/README.md).
 
 ## Usage
 

@@ -1,0 +1,50 @@
+[sheet]
+spreadsheet_id = "YOUR_SPREADSHEET_ID_HERE"
+tab = "Portfolio"
+table = "INVESTMENT_HOLDINGS"
+
+[symbols]
+ignore_prefixes = [
+    "SPAXX",
+    "FDRXX",
+]
+ignore_exact = [
+    "PENDING ACTIVITY",
+]
+
+[symbols.aliases]
+BRKB = "BRK.B"
+
+[tolerance]
+shares = 1e-06
+avg_cost = 0.005
+
+[[accounts]]
+number = "X00000000"
+name = "Individual"
+label = "Fidelity Brokerage"
+enabled = true
+
+[[accounts]]
+number = "000000001"
+name = "ROTH IRA"
+label = "Fidelity Roth IRA"
+enabled = true
+
+[[accounts]]
+number = "000000002"
+name = "Health Savings Account"
+label = "Fidelity HSA"
+enabled = true
+
+[[accounts]]
+number = "000000004"
+name = "EMPLOYER 401(K) PLAN"
+label = "Employer 401K"
+enabled = true
+
+[[accounts]]
+number = "000000003"
+name = "Traditional IRA"
+label = "Fidelity Brokerage"
+enabled = false

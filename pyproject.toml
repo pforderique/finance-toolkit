@@ -22,3 +22,9 @@ dev = [
     "pytest-cov>=6.2.1",
     "coverage>=7.9.2",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: touches the live Google Sheet (network + credentials required); opt-in only, run with `-m live`",
+]
+addopts = "-m \"not live\""

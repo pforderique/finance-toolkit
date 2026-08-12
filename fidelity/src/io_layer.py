@@ -3,10 +3,9 @@
 import csv
 import json
 import os
-import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from dotenv import find_dotenv, load_dotenv
 from google.oauth2 import service_account
@@ -14,12 +13,22 @@ from googleapiclient.discovery import Resource
 from googleapiclient.discovery import build
 
 from fidelity.src import constants
-from fidelity.src.datamodel import SheetRow, TableState
+from fidelity.src.datamodel import SheetRow, TableInfo, TargetRow
 
 load_dotenv(find_dotenv())
 
 GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
-_HYPERLINK_PATTERN = re.compile(r'=HYPERLINK\(".*?",\s*"(.*?)"\)', re.IGNORECASE)
+
+# Column names the INVESTMENT_HOLDINGS table must expose, resolved BY NAME.
+EXPECTED_TABLE_COLUMNS = (
+    "Ticker",
+    "Shares",
+    "Avg_Cost",
+    "Mkt_Price",
+    "Total_Equity",
+    "Pct_Gain",
+    "Account",
+)
 
 
 def read_input_csv(path: Path) -> List[dict]:
@@ -70,90 +79,169 @@ def _get_sheets_service() -> Resource:
     return build("sheets", "v4", credentials=credentials, cache_discovery=False)
 
 
-def read_portfolio_table(sheet_id: str, tab: str) -> TableState:
-    """Read the portfolio tracker table with both formulas and values."""
+def _column_letter(index: int) -> str:
+    """0-based column index -> A1 column letter(s). Only ever called with small indices here."""
+    letters = ""
+    index += 1
+    while index > 0:
+        index, remainder = divmod(index - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
+def resolve_table(spreadsheet_id: str, tab: str, table_name: str) -> TableInfo:
+    """Resolve a native Sheets table BY NAME on a given tab. One read-only API call.
+
+    Hard-errors (RuntimeError) if the tab or table is not found, or if the table
+    is missing any of the expected column names -- never falls back to hardcoded
+    column letters.
+    """
 
     service = _get_sheets_service()
-    range_name = f"{tab}!A{constants.SHEET_RANGE_START_ROW}:G"
-
     try:
-        formulas_response = (
+        response = (
             service.spreadsheets()
-            .values()
             .get(
-                spreadsheetId=sheet_id,
-                range=range_name,
-                valueRenderOption="FORMULA",
+                spreadsheetId=spreadsheet_id,
+                ranges=[tab],
+                fields=(
+                    "sheets(properties(sheetId,title,gridProperties),"
+                    "tables(tableId,name,range,columnProperties))"
+                ),
             )
             .execute()
         )
-        values_response = (
+    except Exception as exc:  # pragma: no cover - network call
+        raise RuntimeError(
+            f"Failed to resolve table metadata for tab '{tab}': {exc}"
+        ) from exc
+
+    sheets = response.get("sheets", [])
+    if not sheets:
+        raise RuntimeError(f"Tab '{tab}' not found in spreadsheet {spreadsheet_id}")
+
+    sheet = sheets[0]
+    props = sheet.get("properties", {})
+    sheet_id = props.get("sheetId")
+    tables = sheet.get("tables", [])
+    found_names = [t.get("name") for t in tables]
+
+    table = next((t for t in tables if t.get("name") == table_name), None)
+    if table is None:
+        raise RuntimeError(
+            f"Table '{table_name}' not found on tab '{tab}'. "
+            f"Tables present: {found_names or '(none)'}"
+        )
+
+    grange = table.get("range", {})
+    start_row_index = grange.get("startRowIndex")
+    end_row_index = grange.get("endRowIndex")
+    start_col_index = grange.get("startColumnIndex", 0)
+
+    if start_row_index is None or end_row_index is None:
+        raise RuntimeError(f"Table '{table_name}' has no resolvable row range")
+    if start_col_index != 0:
+        raise RuntimeError(
+            f"Table '{table_name}' does not start at column A "
+            f"(startColumnIndex={start_col_index}); this tool assumes column A."
+        )
+
+    header_row = start_row_index + 1
+    first_data_row = header_row + 1
+    last_data_row = end_row_index
+    capacity = last_data_row - first_data_row + 1
+
+    column_props = table.get("columnProperties", [])
+    column_index_by_name: Dict[str, int] = {}
+    for idx, col in enumerate(column_props):
+        name = col.get("columnName")
+        col_index = col.get("columnIndex", idx)  # API omits columnIndex for index 0
+        if name:
+            column_index_by_name[name] = col_index
+
+    missing = [c for c in EXPECTED_TABLE_COLUMNS if c not in column_index_by_name]
+    if missing:
+        raise RuntimeError(
+            f"Table '{table_name}' is missing expected column(s) {missing}. "
+            f"Columns present: {sorted(column_index_by_name)}"
+        )
+
+    last_col_letter = _column_letter(max(column_index_by_name.values()))
+    range_a1 = f"{tab}!A{first_data_row}:{last_col_letter}{last_data_row}"
+
+    return TableInfo(
+        sheet_id=sheet_id,
+        table_id=str(table.get("tableId")),
+        table_name=table_name,
+        tab=tab,
+        header_row=header_row,
+        first_data_row=first_data_row,
+        last_data_row=last_data_row,
+        capacity=capacity,
+        column_index_by_name=column_index_by_name,
+        range_a1=range_a1,
+    )
+
+
+def read_raw_values(spreadsheet_id: str, range_a1: str) -> List[List]:
+    """Generic UNFORMATTED_VALUE read of any range. One read-only API call.
+
+    Used both to build `SheetRow`s (via `read_table_block`) and to capture the
+    pre-write rollback snapshot (`out/<ts>_before.json`) -- the raw grid, not
+    the parsed/typed view.
+    """
+
+    service = _get_sheets_service()
+    try:
+        response = (
             service.spreadsheets()
             .values()
             .get(
-                spreadsheetId=sheet_id,
-                range=range_name,
+                spreadsheetId=spreadsheet_id,
+                range=range_a1,
                 valueRenderOption="UNFORMATTED_VALUE",
             )
             .execute()
         )
     except Exception as exc:  # pragma: no cover - network call
-        message = (
-            "Failed to read Google Sheet. Ensure the sheet exists, the service account email "
-            "has access, and the Google Sheets API is enabled."
-        )
-        raise RuntimeError(message) from exc
+        raise RuntimeError(f"Failed to read range '{range_a1}': {exc}") from exc
 
-    formula_rows = _normalize_rows(formulas_response.get("values", []))
-    value_rows = _normalize_rows(values_response.get("values", []))
+    return response.get("values", [])
+
+
+def read_table_block(spreadsheet_id: str, table_info: TableInfo) -> List[SheetRow]:
+    """Read the resolved table's data rows (UNFORMATTED_VALUE). One read-only API call.
+
+    Rows that are entirely blank (no ticker, no account label) are dropped --
+    they're just unused capacity, not holdings.
+    """
+
+    values = read_raw_values(spreadsheet_id, table_info.range_a1)
+    ncols = max(table_info.column_index_by_name.values()) + 1
+    ticker_idx = table_info.column_index_by_name["Ticker"]
+    shares_idx = table_info.column_index_by_name["Shares"]
+    avg_cost_idx = table_info.column_index_by_name["Avg_Cost"]
+    account_idx = table_info.column_index_by_name["Account"]
 
     rows: List[SheetRow] = []
-    for offset, formula_row in enumerate(formula_rows):
-        row_index = constants.SHEET_RANGE_START_ROW + offset
-        value_row = value_rows[offset] if offset < len(value_rows) else [""] * 7
-
-        ticker = _extract_ticker(formula_row[0])
-        account_label = formula_row[6].strip()
-        shares = _coerce_float(value_row[1])
-        avg_cost = _coerce_float(value_row[2])
-        description = formula_row[3].strip() or None
+    for offset, raw_row in enumerate(values):
+        padded = list(raw_row) + [""] * (ncols - len(raw_row))
+        ticker = str(padded[ticker_idx]).strip()
+        account_label = str(padded[account_idx]).strip()
+        if not ticker and not account_label:
+            continue  # unused capacity slot
 
         rows.append(
             SheetRow(
-                ticker=ticker,
+                ticker=ticker.upper(),
                 account_label=account_label,
-                shares=shares,
-                avg_cost=avg_cost,
-                description=description,
-                raw_index=row_index,
+                shares=_coerce_float(padded[shares_idx]),
+                avg_cost=_coerce_float(padded[avg_cost_idx]),
+                row_number=table_info.first_data_row + offset,
             )
         )
 
-    return TableState(
-        rows=rows,
-        start_row_index=constants.SHEET_RANGE_START_ROW,
-        raw_values=formula_rows,
-        value_rows=value_rows,
-    )
-
-
-def _normalize_rows(values: List[List[str]]) -> List[List[str]]:
-    normalized: List[List[str]] = []
-    for row in values:
-        padded = list(row)
-        if len(padded) < len(constants.SHEET_RANGE_COLUMNS):
-            padded.extend([""] * (len(constants.SHEET_RANGE_COLUMNS) - len(padded)))
-        normalized.append(padded[: len(constants.SHEET_RANGE_COLUMNS)])
-    return normalized
-
-
-def _extract_ticker(value: str) -> str:
-    if not value:
-        return ""
-    match = _HYPERLINK_PATTERN.match(value)
-    if match:
-        return match.group(1).strip().upper()
-    return value.strip().upper()
+    return rows
 
 
 def _coerce_float(value) -> Optional[float]:
@@ -166,133 +254,111 @@ def _coerce_float(value) -> Optional[float]:
         return None
 
 
-def write_portfolio_table(sheet_id: str, tab: str, rows: List[List[str]]) -> None:
-    """Replace the contents of the sheet range starting at A3 with provided rows."""
+def build_write_request(table_info: TableInfo, target_rows: Sequence[TargetRow]) -> Dict:
+    """Build the exact `values.batchUpdate` request body. Pure -- no I/O.
 
-    service = _get_sheets_service()
-    range_name = f"{tab}!A{constants.SHEET_RANGE_START_ROW}"
+    This is THE safety-critical function in the tool: it is the only place
+    that decides what gets written and where. Split out from `write_table_block`
+    so the payload can be unit-tested directly (never mocking the network) --
+    the regression guard on "only A:C and G, never D/E/F, never another tab,
+    no structural request types" lives against this function's return value.
 
-    try:
-        service.spreadsheets().values().clear(
-            spreadsheetId=sheet_id,
-            range=f"{tab}!A{constants.SHEET_RANGE_START_ROW}:{constants.SHEET_RANGE_COLUMNS[-1]}",
-            body={},
-        ).execute()
+    Ranges are computed from the resolved `table_info`, never hardcoded.
+    """
 
-        if rows:
-            service.spreadsheets().values().update(
-                spreadsheetId=sheet_id,
-                range=range_name,
-                valueInputOption="USER_ENTERED",
-                body={"values": rows},
-            ).execute()
-    except Exception as exc:  # pragma: no cover - network call
-        detail = getattr(exc, "content", None)
-        if detail and isinstance(detail, (bytes, bytearray)):
-            try:
-                payload = json.loads(detail.decode("utf-8"))
-                error_message = payload.get("error", {}).get("message")
-            except Exception:  # pylint: disable=broad-except
-                error_message = None
-        elif hasattr(exc, "error_details"):
-            error_message = str(exc.error_details)
-        else:
-            error_message = str(exc)
+    ticker_idx = table_info.column_index_by_name["Ticker"]
+    shares_idx = table_info.column_index_by_name["Shares"]
+    avg_cost_idx = table_info.column_index_by_name["Avg_Cost"]
+    account_idx = table_info.column_index_by_name["Account"]
 
-        base_message = (
-            "Failed to update Google Sheet. Confirm the service account has Editor access, "
-            "the tab exists, and the Sheets API is enabled."
+    if (ticker_idx, shares_idx, avg_cost_idx) != (0, 1, 2):
+        raise RuntimeError(
+            "Unexpected column layout: expected Ticker/Shares/Avg_Cost at columns "
+            f"A/B/C (indices 0/1/2), got indices {ticker_idx}/{shares_idx}/{avg_cost_idx}. "
+            "Refusing to write -- this table doesn't match the layout this tool was built for."
         )
-        if error_message:
-            raise RuntimeError(f"{base_message} (Google error: {error_message})") from exc
-        raise RuntimeError(base_message) from exc
+
+    abc_last_col = _column_letter(avg_cost_idx)
+    account_col = _column_letter(account_idx)
+    abc_range = f"{table_info.tab}!A{table_info.first_data_row}:{abc_last_col}{table_info.last_data_row}"
+    account_range = (
+        f"{table_info.tab}!{account_col}{table_info.first_data_row}:"
+        f"{account_col}{table_info.last_data_row}"
+    )
+
+    abc_values = [
+        [
+            row.ticker,
+            row.shares if row.shares is not None else "",
+            row.avg_cost if row.avg_cost is not None else "",
+        ]
+        for row in target_rows
+    ]
+    account_values = [[row.account_label] for row in target_rows]
+
+    return {
+        "valueInputOption": "USER_ENTERED",
+        "data": [
+            {"range": abc_range, "values": abc_values},
+            {"range": account_range, "values": account_values},
+        ],
+    }
 
 
-def sort_portfolio_table(sheet_id: str, tab: str, row_count: int, descending: bool = True) -> None:
-    """Sort the synced range by the equity column using Google Sheets so formulas relink."""
+def write_table_block(spreadsheet_id: str, table_info: TableInfo, target_rows: Sequence[TargetRow]) -> dict:
+    """The ONLY Sheets write this tool ever issues: one `values.batchUpdate`
+    call with exactly two data ranges (see `build_write_request`). Never a
+    structural `spreadsheets.batchUpdate` -- no insertDimension, deleteDimension,
+    sortRange, or table-shape request of any kind.
+    """
 
-    if row_count <= 1:
-        return
-
+    body = build_write_request(table_info, target_rows)
     service = _get_sheets_service()
     try:
-        metadata = (
+        return (
             service.spreadsheets()
-            .get(
-                spreadsheetId=sheet_id,
-                fields="sheets(properties(sheetId,title))",
-            )
+            .values()
+            .batchUpdate(spreadsheetId=spreadsheet_id, body=body)
             .execute()
         )
     except Exception as exc:  # pragma: no cover - network call
-        raise RuntimeError("Failed to load spreadsheet metadata for sorting") from exc
-
-    sheet_props = None
-    for sheet in metadata.get("sheets", []):
-        props = sheet.get("properties", {})
-        if props.get("title") == tab:
-            sheet_props = props
-            break
-
-    if not sheet_props:
-        raise RuntimeError(f"Tab '{tab}' not found while attempting to sort the sheet")
-
-    start_row_index = constants.SHEET_RANGE_START_ROW - 1
-    equity_column_index = constants.SHEET_RANGE_COLUMNS.index("E")
-    sort_order = "DESCENDING" if descending else "ASCENDING"
-
-    sort_request = {
-        "sortRange": {
-            "range": {
-                "sheetId": sheet_props.get("sheetId"),
-                "startRowIndex": start_row_index,
-                "endRowIndex": start_row_index + row_count,
-                "startColumnIndex": 0,
-                "endColumnIndex": len(constants.SHEET_RANGE_COLUMNS),
-            },
-            "sortSpecs": [
-                {
-                    "dimensionIndex": equity_column_index,
-                    "sortOrder": sort_order,
-                }
-            ],
-        }
-    }
-
-    try:
-        service.spreadsheets().batchUpdate(
-            spreadsheetId=sheet_id,
-            body={"requests": [sort_request]},
-        ).execute()
-    except Exception as exc:  # pragma: no cover - network call
-        raise RuntimeError("Failed to sort Google Sheet after updating rows") from exc
-
-
-def write_snapshot(
-        path: Path, 
-        headers: Sequence[str], 
-        rows: Iterable[Sequence],
-        rows_before_header: Optional[Sequence[str]] = None
-    ) -> None:
-    """Persist the pre-update snapshot to disk."""
-    materialized = list(rows)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        if rows_before_header:
-            writer.writerow(list(rows_before_header))
-        writer.writerow(list(headers))
-        writer.writerows(materialized)
-
-
-def write_change_log(path: Path, records: Iterable[dict]) -> None:
-    """Persist the change log for auditing."""
-    materialized = list(records)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(materialized, handle, indent=2)
+        raise RuntimeError(f"Sheets write failed: {exc}") from exc
 
 
 def sheets_url_for(sheet_id: str) -> str:
     """Construct a Google Sheets URL for the given sheet ID."""
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}"
+
+
+def read_account_dropdown_labels(spreadsheet_id: str) -> List[str]:
+    """Live-read the valid Account dropdown labels from `_Helper!B7:B`.
+
+    The Portfolio!G (Account) column is a ONE_OF_RANGE dropdown sourced from
+    `=_HELPER[Asset_Holdings]`, which lives in the `_Helper` tab's `_HELPER`
+    native table, column B ("Asset_Holdings"), data starting row 7. Verified
+    live against the sheet (header row 6, table startRowIndex=5).
+    """
+    service = _get_sheets_service()
+    try:
+        response = (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=spreadsheet_id,
+                range="_Helper!B7:B",
+                valueRenderOption="FORMATTED_VALUE",
+            )
+            .execute()
+        )
+    except Exception as exc:  # pragma: no cover - network call
+        raise RuntimeError(
+            "Failed to read Account dropdown labels from '_Helper!B7:B'. "
+            "Ensure the sheet exists, the service account has access, and the "
+            "Google Sheets API is enabled."
+        ) from exc
+
+    labels: List[str] = []
+    for row in response.get("values", []):
+        if row and str(row[0]).strip():
+            labels.append(str(row[0]).strip())
+    return labels

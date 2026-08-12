@@ -11,8 +11,15 @@ dependencies = [
     "python-dotenv>=1.1.0",
     "typer>=0.9.0",
     "rich>=13.5.2",
+    "tomli-w>=1.0.0",
 ]
 
 [tool.setuptools.packages.find]
 where = [".."]
 include = ["fidelity*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: touches the live Google Sheet (network + credentials required); opt-in only, run with `-m live`",
+]
+addopts = "-m \"not live\""

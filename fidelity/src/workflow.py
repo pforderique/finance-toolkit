@@ -1,328 +1,523 @@
-"""Workflow orchestration for syncing Fidelity CSV data with Google Sheets."""
+"""Diff engine (pure) and the read+diff orchestration for `fidelity sync` / `fidelity diff`.
+
+`plan_changes` is a pure function -- zero I/O -- so it's directly unit-testable with
+hand-built fixtures. All Sheets/CSV I/O lives in `run_dry_run`, which composes
+`io_layer` + `preprocess` + `plan_changes` for the CLI.
+"""
 
 from __future__ import annotations
 
-from dataclasses import asdict
-from typing import Dict, List, Tuple
-
-from rich.table import Table
+import hashlib
+import json
+import math
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Set
 
 from fidelity.src import constants, io_layer, preprocess
-from fidelity.src.config import ChangeRecord, RunConfig, RunResult
-from fidelity.src.datamodel import HoldingRecord, SheetRow
-from fidelity.src.logging_setup import console, print_header, print_success, print_warning
+from fidelity.src.datamodel import (
+    ChangeEntry,
+    ChangePlan,
+    HoldingKey,
+    HoldingRecord,
+    SheetRow,
+    TableInfo,
+    TargetRow,
+)
+from fidelity.src.settings import Settings
 
-FAMILY_PREFIX = "Fidelity "
+# Deletes beyond this fraction of currently-owned sheet rows require an
+# explicit --yes or --allow-mass-delete (guard #4). A partial/garbled export
+# should never be able to silently wipe most of an account.
+MASS_DELETE_THRESHOLD_RATIO = 0.25
 
 
-def run_workflow(cfg: RunConfig) -> RunResult:
-    """Run the end-to-end synchronization from CSV to Google Sheets."""
+class SyncGuardError(RuntimeError):
+    """A pre-flight safety guard failed. Always fatal -- the write is never attempted."""
 
-    print_header(f"{constants.APP_NAME} • {cfg.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
 
-    warnings: List[str] = []
+def plan_changes(
+    sheet_rows: List[SheetRow],
+    holdings: List[HoldingRecord],
+    settings: Settings,
+    observed_labels: Set[str],
+    skipped_keys: Set[HoldingKey],
+) -> ChangePlan:
+    """Pure diff engine. No I/O.
 
-    try:
-        raw_rows = io_layer.read_input_csv(cfg.csv_path)
-    except (FileNotFoundError, ValueError) as exc:
-        raise RuntimeError(str(exc)) from exc
+    in_scope(row) <=> row.account_label in (owned_labels & observed_labels).
+    This is BOTH data-loss guards at once:
+      - skipped_keys suppresses deletion for CSV rows seen but unparsable.
+      - observed_labels narrows the delete scope to accounts actually present
+        in this CSV, so a partial export can't mass-delete accounts it never
+        mentioned.
+    """
 
-    holdings, preprocess_warnings = preprocess.preprocess_rows(raw_rows)
-    warnings.extend(preprocess_warnings)
+    owned = settings.owned_labels()
+    scope = owned & observed_labels
 
-    holdings_map: Dict[Tuple[str, str], HoldingRecord] = {
-        (record.ticker, record.account_label): record for record in holdings
+    # Defense in depth: only holdings for in-scope labels are eligible to become
+    # ADDs. In the real pipeline this filter is a no-op (preprocess_rows only
+    # ever resolves labels via settings.resolve_label, which already restricts
+    # to enabled accounts), but plan_changes should not rely on that invariant
+    # holding at every call site.
+    holdings_map: Dict[HoldingKey, HoldingRecord] = {
+        (h.ticker, h.account_label): h for h in holdings if h.account_label in scope
     }
 
-    try:
-        table_state = io_layer.read_portfolio_table(cfg.sheet_id, cfg.tab_name)
-    except RuntimeError as exc:
-        raise RuntimeError(str(exc)) from exc
+    plan = ChangePlan()
+    seen_in_scope: Dict[HoldingKey, SheetRow] = {}
 
-    title_row = ["Portfolio Tracker"] + [""] * (len(constants.SHEET_RANGE_COLUMNS) - 1)
-    padded_snapshot_rows = [_pad_row(row) for row in table_state.raw_values]
-    artifacts_dir = cfg.ensure_artifacts_dir()
-    timestamp_label = cfg.timestamp.strftime('%Y%m%d-%H%M%S')
-    previous_snapshot_path = artifacts_dir / f"{timestamp_label}_previous_portfolio.csv"
-    io_layer.write_snapshot(
-        previous_snapshot_path,
-        constants.SHEET_RANGE_NAMES,
-        padded_snapshot_rows,
-        rows_before_header=title_row,
-    )
-
-    updates: List[ChangeRecord] = []
-    removals: List[ChangeRecord] = []
-    additions: List[ChangeRecord] = []
-    existing_map: Dict[Tuple[str, str], Tuple[int, SheetRow]] = {}
-
-    for idx, sheet_row in enumerate(table_state.rows):
-        list_index = idx
-        if _is_fidelity_row(sheet_row):
-            key = (sheet_row.ticker, sheet_row.account_label)
-            if key not in existing_map:
-                existing_map[key] = (list_index, sheet_row)
-            else:
-                warnings.append(
-                    "Duplicate Fidelity row detected in sheet for"
-                    f" <{sheet_row.ticker} | {sheet_row.account_label}>"
-                )
-
-    # Track which indices to remove
-    indices_to_remove: List[int] = []
-
-    for key, (list_index, sheet_row) in existing_map.items():
-        holding = holdings_map.get(key)
-        if holding is None:
-            indices_to_remove.append(list_index)
-            removals.append(
-                ChangeRecord(
-                    action="removed",
-                    ticker=sheet_row.ticker,
-                    account_label=sheet_row.account_label,
-                    prior_shares=sheet_row.shares,
-                    prior_avg_cost=sheet_row.avg_cost,
-                    new_shares=None,
-                    new_avg_cost=None,
+    for row in sheet_rows:
+        if row.account_label not in scope:
+            plan.untouched.append(
+                ChangeEntry(
+                    action="untouched",
+                    ticker=row.ticker,
+                    account_label=row.account_label,
+                    row_number=row.row_number,
+                    old_shares=row.shares,
+                    old_avg_cost=row.avg_cost,
+                    new_shares=row.shares,
+                    new_avg_cost=row.avg_cost,
                 )
             )
             continue
 
-        raw_row = padded_snapshot_rows[list_index]
-        prior_shares = sheet_row.shares
-        prior_avg_cost = sheet_row.avg_cost
+        key: HoldingKey = (row.ticker, row.account_label)
 
-        updated_shares = holding.shares
-        updated_avg_cost = holding.avg_cost
-
-        if (
-            _needs_update(prior_shares, updated_shares)
-            or _needs_update(prior_avg_cost, updated_avg_cost)
-        ):
-            raw_row[1] = _format_numeric(updated_shares)  # column B
-            raw_row[2] = _format_numeric(updated_avg_cost)  # column C
-            raw_row[6] = sheet_row.account_label  # column G
-            updates.append(
-                ChangeRecord(
-                    action="updated",
-                    ticker=sheet_row.ticker,
-                    account_label=sheet_row.account_label,
-                    prior_shares=prior_shares,
-                    prior_avg_cost=prior_avg_cost,
-                    new_shares=updated_shares,
-                    new_avg_cost=updated_avg_cost,
+        if key in seen_in_scope:
+            first = seen_in_scope[key]
+            plan.deletes.append(
+                ChangeEntry(
+                    action="delete",
+                    ticker=row.ticker,
+                    account_label=row.account_label,
+                    row_number=row.row_number,
+                    old_shares=row.shares,
+                    old_avg_cost=row.avg_cost,
+                    new_shares=None,
+                    new_avg_cost=None,
                 )
             )
-        holdings_map.pop(key, None)
+            plan.warnings.append(
+                f"Duplicate in-scope sheet row for {row.ticker}/{row.account_label} at "
+                f"row {row.row_number}; keeping row {first.row_number}, deleting this one"
+            )
+            continue
 
-    # Remove rows by deleting in reverse order to keep indices stable
-    for idx in sorted(indices_to_remove, reverse=True):
-        # del padded_snapshot_rows[idx]
-        # instead of deleting, blank out the row to preserve formulas in other rows
-        padded_snapshot_rows[idx] = [""] * len(padded_snapshot_rows[idx])
+        seen_in_scope[key] = row
+        holding = holdings_map.pop(key, None)
 
-    # Add new holdings remaining in holdings_map
-    start_idx = table_state.start_row_index + len(table_state.rows)
-    e_template = '=IF(NOT(B{row}*D{row}=0), B{row}*D{row}, "")'
-    f_template = '=IF(C{row}=0, "", (D{row}/C{row})-1)'
-    for idx, holding in enumerate(holdings_map.values(), start=start_idx):
-        new_row = ["", "", "", "", "", "", ""]
-        new_row[0] = holding.ticker
-        new_row[1] = _format_numeric(holding.shares)
-        new_row[2] = _format_numeric(holding.avg_cost)
-        new_row[3] = ""  # D3 ARRAYFORMULA (VLOOKUP to H:I lookup table) fills this automatically
-        new_row[4] = e_template.format(row=idx)
-        new_row[5] = f_template.format(row=idx)
-        new_row[6] = holding.account_label
-        padded_snapshot_rows.append(new_row)
-        additions.append(
-            ChangeRecord(
-                action="added",
-                ticker=holding.ticker,
-                account_label=holding.account_label,
-                prior_shares=None,
-                prior_avg_cost=None,
+        if holding is None:
+            if key in skipped_keys:
+                # Protected: this row was seen in the CSV but couldn't be parsed.
+                # Treat as unchanged rather than risk a data-loss delete.
+                plan.unchanged.append(
+                    ChangeEntry(
+                        action="unchanged",
+                        ticker=row.ticker,
+                        account_label=row.account_label,
+                        row_number=row.row_number,
+                        old_shares=row.shares,
+                        old_avg_cost=row.avg_cost,
+                        new_shares=row.shares,
+                        new_avg_cost=row.avg_cost,
+                    )
+                )
+            else:
+                plan.deletes.append(
+                    ChangeEntry(
+                        action="delete",
+                        ticker=row.ticker,
+                        account_label=row.account_label,
+                        row_number=row.row_number,
+                        old_shares=row.shares,
+                        old_avg_cost=row.avg_cost,
+                        new_shares=None,
+                        new_avg_cost=None,
+                    )
+                )
+            continue
+
+        shares_delta = abs((row.shares or 0.0) - holding.shares)
+        avg_cost_delta = abs((row.avg_cost or 0.0) - holding.avg_cost)
+
+        if shares_delta > settings.tolerance.shares or avg_cost_delta > settings.tolerance.avg_cost:
+            plan.updates.append(
+                ChangeEntry(
+                    action="update",
+                    ticker=row.ticker,
+                    account_label=row.account_label,
+                    row_number=row.row_number,
+                    old_shares=row.shares,
+                    old_avg_cost=row.avg_cost,
+                    new_shares=holding.shares,
+                    new_avg_cost=holding.avg_cost,
+                )
+            )
+        else:
+            plan.unchanged.append(
+                ChangeEntry(
+                    action="unchanged",
+                    ticker=row.ticker,
+                    account_label=row.account_label,
+                    row_number=row.row_number,
+                    old_shares=row.shares,
+                    old_avg_cost=row.avg_cost,
+                    new_shares=holding.shares,
+                    new_avg_cost=holding.avg_cost,
+                )
+            )
+
+    # Anything left in holdings_map had no matching in-scope sheet row -> add.
+    for (ticker, label), holding in holdings_map.items():
+        plan.adds.append(
+            ChangeEntry(
+                action="add",
+                ticker=ticker,
+                account_label=label,
+                row_number=None,
+                old_shares=None,
+                old_avg_cost=None,
                 new_shares=holding.shares,
                 new_avg_cost=holding.avg_cost,
             )
         )
 
-    if not cfg.dry_run:
-        io_layer.write_portfolio_table(cfg.sheet_id, cfg.tab_name, padded_snapshot_rows)
-        io_layer.sort_portfolio_table(cfg.sheet_id, cfg.tab_name, len(padded_snapshot_rows))
-        print_success("Google Sheet updated successfully")
-    else:
-        print_warning("Dry run enabled; no Google Sheet updates were applied")
+    return plan
 
-    change_log_records = [asdict(record) for record in (
-        updates + additions + removals
-    )]
-    edits_path = artifacts_dir / f"{timestamp_label}_edits.json"
-    io_layer.write_change_log(edits_path, change_log_records)
 
-    updated_snapshot_path = artifacts_dir / f"{timestamp_label}_updated_portfolio.csv"
-    io_layer.write_snapshot(updated_snapshot_path, constants.SHEET_RANGE_NAMES, padded_snapshot_rows)
+def build_target_block(
+    table_info: TableInfo,
+    sheet_rows: List[SheetRow],
+    plan: ChangePlan,
+    compact: bool = True,
+) -> List[TargetRow]:
+    """Materialize the full `table_info.capacity`-row logical A/B/C/G block, in
+    final physical row order. Pure -- no I/O.
 
-    _render_summary_table(updates, additions, removals)
-    net_equity_change = _calculate_equity_delta(updates + additions + removals)
-    net_equity_text = _format_currency_delta(net_equity_change)
-    color = "green" if net_equity_change > 0 else "red" if net_equity_change < 0 else None
-    if color:
-        console.print(f"[cyan]Net equity delta:[/cyan] [{color}]{net_equity_text}[/{color}]")
-    else:
-        console.print(f"[cyan]Net equity delta:[/cyan] {net_equity_text}")
+    Dry run and apply both call this, so there is exactly one code path that
+    decides what the sheet should look like -- a dry run's preview and an
+    apply's write can never drift apart.
 
-    for warning in warnings:
-        print_warning(warning)
+    Compaction (default) is safe specifically because column D is a single
+    Ticker-keyed spilled ARRAYFORMULA (position independent) and E/F are
+    self-row formulas pre-filled through the last capacity row -- moving a
+    row from slot 40 to slot 39 is a semantic no-op. `--no-compact` instead
+    blanks deleted rows in place and reuses those (and any never-used) slots
+    for adds, only extending past the last used row if it runs out of blanks.
 
-    if cfg.sheet_id:
-        sheets_url = io_layer.sheets_url_for(cfg.sheet_id) + "?gid=1603070938#gid=1603070938"
-        console.print(f"[cyan]Sheet:[/cyan] [link={sheets_url}]{sheets_url}[/link]")
+    Raises SyncGuardError (guard #1) if the plan needs more rows than the
+    table currently has capacity for.
+    """
 
-    return RunResult(
-        total_rows_processed=len(holdings),
-        updates=updates,
-        removals=removals,
-        additions=additions,
-        warnings=warnings,
-        previous_snapshot_path=previous_snapshot_path,
-        updated_snapshot_path=updated_snapshot_path,
-        edits_log_path=edits_path,
-        sheets_url=sheets_url,
+    delete_rows = {e.row_number for e in plan.deletes}
+    update_by_row = {e.row_number: e for e in plan.updates}
+    adds_sorted = sorted(plan.adds, key=lambda e: (e.account_label, e.ticker))
+
+    needed = len(sheet_rows) - len(delete_rows) + len(adds_sorted)
+    if needed > table_info.capacity:
+        raise SyncGuardError(
+            f"Table '{table_info.table_name}' has room for {table_info.capacity} rows, "
+            f"plan needs {needed}. Extend {table_info.table_name} in the sheet UI (drag its "
+            "bottom edge) and re-run."
+        )
+
+    if compact:
+        survivors: List[TargetRow] = []
+        for row in sheet_rows:
+            if row.row_number in delete_rows:
+                continue
+            entry = update_by_row.get(row.row_number)
+            if entry is not None:
+                survivors.append(
+                    TargetRow(row.ticker, entry.new_shares, entry.new_avg_cost, row.account_label)
+                )
+            else:
+                survivors.append(TargetRow(row.ticker, row.shares, row.avg_cost, row.account_label))
+
+        for entry in adds_sorted:
+            survivors.append(
+                TargetRow(entry.ticker, entry.new_shares, entry.new_avg_cost, entry.account_label)
+            )
+
+        while len(survivors) < table_info.capacity:
+            survivors.append(TargetRow("", None, None, ""))
+
+        return survivors
+
+    # --no-compact: keep every surviving row in its current physical slot;
+    # deletes leave that slot blank; adds fill blank slots (lowest row first,
+    # which includes both freshly-deleted slots and never-used capacity)
+    # before any slot would need to move.
+    slots: Dict[int, Optional[TargetRow]] = {offset: None for offset in range(table_info.capacity)}
+    for row in sheet_rows:
+        if row.row_number in delete_rows:
+            continue
+        offset = row.row_number - table_info.first_data_row
+        entry = update_by_row.get(row.row_number)
+        if entry is not None:
+            slots[offset] = TargetRow(row.ticker, entry.new_shares, entry.new_avg_cost, row.account_label)
+        else:
+            slots[offset] = TargetRow(row.ticker, row.shares, row.avg_cost, row.account_label)
+
+    free_offsets = sorted(offset for offset, value in slots.items() if value is None)
+    for entry, offset in zip(adds_sorted, free_offsets):
+        slots[offset] = TargetRow(entry.ticker, entry.new_shares, entry.new_avg_cost, entry.account_label)
+
+    return [slots[offset] or TargetRow("", None, None, "") for offset in range(table_info.capacity)]
+
+
+@dataclass
+class DryRunResult:
+    table_info: TableInfo
+    sheet_rows: List[SheetRow]
+    holdings: List[HoldingRecord]
+    plan: ChangePlan
+    target_rows: Optional[List[TargetRow]] = None
+
+
+def run_dry_run(
+    csv_path: Path,
+    settings: Settings,
+    spreadsheet_id: Optional[str] = None,
+    tab: Optional[str] = None,
+    table: Optional[str] = None,
+    compact: bool = True,
+) -> DryRunResult:
+    """I/O-performing orchestration: read CSV + sheet, run the pure diff engine.
+
+    Read-only Sheets calls only -- never writes. This is exactly what backs both
+    `fidelity diff` and `fidelity sync --dry-run`, and it's also the
+    first half of `run_apply` -- the plan a write applies is the plan a dry
+    run showed.
+    """
+
+    sid = spreadsheet_id or settings.sheet.spreadsheet_id
+    tab_name = tab or settings.sheet.tab
+    table_name = table or settings.sheet.table
+
+    raw_rows = io_layer.read_input_csv(csv_path)
+    holdings, skipped_keys, observed_labels, csv_warnings = preprocess.preprocess_rows(
+        raw_rows, settings
+    )
+
+    table_info = io_layer.resolve_table(sid, tab_name, table_name)
+    sheet_rows = io_layer.read_table_block(sid, table_info)
+
+    plan = plan_changes(sheet_rows, holdings, settings, observed_labels, skipped_keys)
+    plan.warnings = list(csv_warnings) + plan.warnings
+
+    target_rows: Optional[List[TargetRow]] = None
+    try:
+        target_rows = build_target_block(table_info, sheet_rows, plan, compact=compact)
+    except SyncGuardError as exc:
+        # Surfaced as a warning rather than raised here -- capacity is only a
+        # FATAL guard when actually writing (`run_apply`); a plain dry run
+        # should still show the diff and let the user see the problem.
+        plan.warnings.append(str(exc))
+
+    return DryRunResult(
+        table_info=table_info,
+        sheet_rows=sheet_rows,
+        holdings=holdings,
+        plan=plan,
+        target_rows=target_rows,
     )
 
 
-def _pad_row(row: List[str]) -> List[str]:
-    padded = list(row)
-    if len(padded) < len(constants.SHEET_RANGE_COLUMNS):
-        padded.extend([""] * (len(constants.SHEET_RANGE_COLUMNS) - len(padded)))
-    return padded[: len(constants.SHEET_RANGE_COLUMNS)]
+def _csv_sha256(csv_path: Path) -> str:
+    return hashlib.sha256(Path(csv_path).read_bytes()).hexdigest()
 
 
-def _is_fidelity_row(sheet_row: SheetRow) -> bool:
-    return bool(sheet_row.account_label and sheet_row.account_label.startswith(FAMILY_PREFIX))
+def _entry_to_dict(entry: ChangeEntry) -> Dict:
+    return {
+        "action": entry.action,
+        "ticker": entry.ticker,
+        "account_label": entry.account_label,
+        "row": entry.row_number,
+        "prior_shares": entry.old_shares,
+        "prior_avg_cost": entry.old_avg_cost,
+        "new_shares": entry.new_shares,
+        "new_avg_cost": entry.new_avg_cost,
+    }
 
 
-def _needs_update(old: float | None, new: float) -> bool:
-    if old is None:
-        return True
-    return abs(old - new) > 1e-6
+def build_changes_payload(
+    csv_path: Path,
+    spreadsheet_id: str,
+    table_info: TableInfo,
+    plan: ChangePlan,
+    dry_run: bool,
+    applied: bool,
+) -> Dict:
+    """The `out/<ts>_changes.json` document. Same shape whether it's from a
+    dry run (`applied=False`) or a real apply."""
+    return {
+        "spreadsheet_id": spreadsheet_id,
+        "tab": table_info.tab,
+        "table_id": table_info.table_id,
+        "table_range": table_info.range_a1,
+        "csv_path": str(csv_path),
+        "csv_sha256": _csv_sha256(csv_path),
+        "dry_run": dry_run,
+        "applied": applied,
+        "counts": plan.counts(),
+        "changes": [_entry_to_dict(e) for e in plan.all_actionable()],
+        "warnings": list(plan.warnings),
+    }
 
 
-def _format_numeric(value: float | None) -> str:
-    return f"{value:.6f}".rstrip("0").rstrip(".") if value is not None else ""
+def write_changes_artifact(
+    csv_path: Path,
+    spreadsheet_id: str,
+    table_info: TableInfo,
+    plan: ChangePlan,
+    dry_run: bool,
+    applied: bool,
+    artifacts_dir: Optional[Path] = None,
+    timestamp: Optional[str] = None,
+) -> Path:
+    """Write `out/<ts>_changes.json`. Called on dry runs (applied=False) and
+    on applies (applied=True) alike -- same payload shape either way."""
+    out_dir = Path(artifacts_dir) if artifacts_dir is not None else constants.ARTIFACTS_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = timestamp or datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = out_dir / f"{ts}_changes.json"
+    payload = build_changes_payload(csv_path, spreadsheet_id, table_info, plan, dry_run, applied)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
 
 
-
-def _render_summary_table(
-    updates: List[ChangeRecord],
-    additions: List[ChangeRecord],
-    removals: List[ChangeRecord],
-) -> None:
-    table = Table(title="Changes Applied", show_lines=False, show_header=True)
-    table.add_column("Action")
-    table.add_column("Ticker")
-    table.add_column("Account")
-    table.add_column("Shares")
-    table.add_column("Avg. Cost")
-    table.add_column("Equity Δ")
-
-    rows: List[tuple[float, str, ChangeRecord, str, str, str]] = []
-
-    for record in updates:
-        rows.append(
-            (
-                _equity_delta(record),
-                "Update",
-                record,
-                _change_repr(record.prior_shares, record.new_shares),
-                _change_repr(record.prior_avg_cost, record.new_avg_cost),
-                _format_equity_delta(record),
-            )
-        )
-
-    for record in additions:
-        rows.append(
-            (
-                _equity_delta(record),
-                "Add",
-                record,
-                _change_repr(None, record.new_shares),
-                _change_repr(None, record.new_avg_cost),
-                _format_equity_delta(record),
-            )
-        )
-
-    for record in removals:
-        rows.append(
-            (
-                _equity_delta(record),
-                "Remove",
-                record,
-                _change_repr(record.prior_shares, None),
-                _change_repr(record.prior_avg_cost, None),
-                _format_equity_delta(record),
-            )
-        )
-
-    for _, action, record, shares_text, avg_cost_text, equity_text in sorted(
-        rows, key=lambda entry: entry[0], reverse=True
-    ):
-        table.add_row(
-            action,
-            record.ticker,
-            record.account_label,
-            shares_text,
-            avg_cost_text,
-            equity_text,
-        )
-
-    if table.row_count:
-        console.print(table)
-    else:
-        print_success("No fidelity rows required changes")
+def write_before_artifact(
+    spreadsheet_id: str,
+    table_info: TableInfo,
+    artifacts_dir: Optional[Path] = None,
+    timestamp: Optional[str] = None,
+) -> Path:
+    """Write `out/<ts>_before.json`: a fresh raw read of the full A:G block,
+    taken immediately before the write. THE rollback artifact -- restoring
+    from it is a `values.batchUpdate` of the same A:C/G ranges using the
+    `values` captured here."""
+    out_dir = Path(artifacts_dir) if artifacts_dir is not None else constants.ARTIFACTS_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = timestamp or datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = out_dir / f"{ts}_before.json"
+    raw_values = io_layer.read_raw_values(spreadsheet_id, table_info.range_a1)
+    payload = {
+        "spreadsheet_id": spreadsheet_id,
+        "tab": table_info.tab,
+        "table_id": table_info.table_id,
+        "range": table_info.range_a1,
+        "captured_at": ts,
+        "values": raw_values,
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
 
 
-def _change_repr(old: float | None, new: float | None) -> str:
-    parts = []
-    if old is not None:
-        parts.append(str(round(old, 6)))
-    parts.append("→")
-    if new is not None:
-        parts.append(str(round(new, 6)))
-    return " ".join(parts)
+@dataclass
+class SyncResult:
+    table_info: TableInfo
+    sheet_rows: List[SheetRow]
+    holdings: List[HoldingRecord]
+    plan: ChangePlan
+    target_rows: List[TargetRow]
+    applied: bool
+    changes_path: Optional[Path] = None
+    before_path: Optional[Path] = None
 
 
-def _calculate_equity_delta(records: List[ChangeRecord]) -> float:
-    return sum(
-        _equity_delta(record)
-        for record in records
+def run_apply(
+    csv_path: Path,
+    settings: Settings,
+    spreadsheet_id: Optional[str] = None,
+    tab: Optional[str] = None,
+    table: Optional[str] = None,
+    compact: bool = True,
+    yes: bool = False,
+    allow_mass_delete: bool = False,
+    write_artifacts: bool = True,
+    artifacts_dir: Optional[Path] = None,
+) -> SyncResult:
+    """Recompute the plan, run every pre-flight guard, and -- only if all of
+    them pass -- issue the single write. Guard order matches the plan:
+
+      1. capacity            (raised inside build_target_block)
+      2. label validity      (every written Account label is in the live dropdown)
+      3. re-read & compare   (optimistic concurrency: sheet must be unchanged
+                              since the plan above was computed)
+      4. mass-delete         (deletes > 25% of owned rows need --yes/--allow-mass-delete)
+
+    All four are FATAL (raise SyncGuardError) -- none of them are warnings.
+    """
+
+    dry = run_dry_run(csv_path, settings, spreadsheet_id=spreadsheet_id, tab=tab, table=table, compact=compact)
+    sid = spreadsheet_id or settings.sheet.spreadsheet_id
+
+    # Guard #1 (capacity) already ran inside run_dry_run's build_target_block
+    # call; re-run it here so a capacity failure is FATAL for an apply (it was
+    # only a warning for a plain dry run).
+    target_rows = build_target_block(dry.table_info, dry.sheet_rows, dry.plan, compact=compact)
+
+    # Guard #2: every label about to be written must be a valid live dropdown value.
+    valid_labels = set(io_layer.read_account_dropdown_labels(sid))
+    bad_labels = sorted(
+        {row.account_label for row in target_rows if row.account_label and row.account_label not in valid_labels}
     )
+    if bad_labels:
+        raise SyncGuardError(
+            f"Refusing to write: label(s) not present in the live Account dropdown "
+            f"(_Helper[Asset_Holdings]): {bad_labels}. Fix fidelity/settings.toml or the "
+            "sheet's dropdown source and re-run."
+        )
 
+    # Guard #3: optimistic concurrency. Re-read the block right before writing
+    # and compare against the snapshot the plan above was computed from -- a
+    # human (or another run) may have edited the sheet in between.
+    rechecked_rows = io_layer.read_table_block(sid, dry.table_info)
+    if rechecked_rows != dry.sheet_rows:
+        raise SyncGuardError(
+            "The sheet changed since this plan was computed (optimistic concurrency "
+            "check failed) -- someone may be editing it right now. Re-run "
+            "`fidelity sync` to recompute against the current state."
+        )
 
-def _format_equity_delta(record: ChangeRecord) -> str:
-    delta = _equity_delta(record)
-    formatted = _format_currency_delta(delta)
-    color = "green" if delta > 0 else "red" if delta < 0 else None
-    if color:
-        return f"[{color}]{formatted}[/{color}]"
-    return formatted
+    # Guard #4: mass-delete threshold.
+    owned_row_count = sum(1 for row in dry.sheet_rows if row.account_label in settings.owned_labels())
+    threshold = math.floor(owned_row_count * MASS_DELETE_THRESHOLD_RATIO)
+    if len(dry.plan.deletes) > threshold and not (yes or allow_mass_delete):
+        raise SyncGuardError(
+            f"Plan deletes {len(dry.plan.deletes)} row(s), exceeding the mass-delete "
+            f"threshold of {threshold} ({int(MASS_DELETE_THRESHOLD_RATIO * 100)}% of "
+            f"{owned_row_count} owned rows). Pass --yes or --allow-mass-delete to proceed "
+            "if this is expected."
+        )
 
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    before_path: Optional[Path] = None
+    if write_artifacts:
+        # Captured immediately before the write -- this IS the rollback state.
+        before_path = write_before_artifact(sid, dry.table_info, artifacts_dir=artifacts_dir, timestamp=ts)
 
-def _equity_delta(record: ChangeRecord) -> float:
-    return _equity_value(record.new_shares, record.new_avg_cost) - _equity_value(
-        record.prior_shares, record.prior_avg_cost
+    io_layer.write_table_block(sid, dry.table_info, target_rows)
+
+    changes_path: Optional[Path] = None
+    if write_artifacts:
+        changes_path = write_changes_artifact(
+            csv_path, sid, dry.table_info, dry.plan, dry_run=False, applied=True,
+            artifacts_dir=artifacts_dir, timestamp=ts,
+        )
+
+    return SyncResult(
+        table_info=dry.table_info,
+        sheet_rows=dry.sheet_rows,
+        holdings=dry.holdings,
+        plan=dry.plan,
+        target_rows=target_rows,
+        applied=True,
+        changes_path=changes_path,
+        before_path=before_path,
     )
-
-
-def _format_currency_delta(value: float) -> str:
-    if abs(value) <= 1e-6:
-        return "$0.00"
-    sign = "+" if value >= 0 else "-"
-    return f"{sign}${abs(value):,.2f}"
-
-
-def _equity_value(shares: float | None, avg_cost: float | None) -> float:
-    if shares is None or avg_cost is None:
-        return 0.0
-    return shares * avg_cost
