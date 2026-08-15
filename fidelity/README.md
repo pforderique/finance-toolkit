@@ -94,7 +94,7 @@ Run any of them as `uv run python -m fidelity.main <command>`.
 
 `sync` refuses to write if the plan doesn't fit the table, if an account label
 isn't in the sheet's dropdown, if the sheet changed since the preview was
-computed, or if it would delete more than 25% of your rows (override with
+computed, or if it would delete more than 10% of your rows (override with
 `--allow-mass-delete`). Every run — dry or real — logs what it did to
 `fidelity/out/`, including a snapshot you can replay to roll back.
 

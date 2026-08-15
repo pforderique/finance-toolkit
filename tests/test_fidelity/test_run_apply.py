@@ -142,7 +142,7 @@ def test_guard3_concurrent_modification_is_fatal(tmp_path, settings, monkeypatch
 def test_guard4_mass_delete_requires_yes_or_allow_flag(tmp_path, settings, monkeypatch):
     table_info = _table_info(capacity=10)
     # 4 owned rows in the sheet; CSV observes the account but lists none of
-    # them -> all 4 become deletes, well past the 25% threshold (=1 row).
+    # them -> all 4 become deletes, well past the 10% threshold (=0 rows).
     sheet_rows = [
         SheetRow("A", "Fidelity Brokerage", 1.0, 1.0, row_number=7),
         SheetRow("B", "Fidelity Brokerage", 1.0, 1.0, row_number=8),

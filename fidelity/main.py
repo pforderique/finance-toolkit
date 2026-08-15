@@ -143,7 +143,7 @@ def sync(
     allow_mass_delete: bool = typer.Option(
         False,
         "--allow-mass-delete",
-        help="Confirm proceeding despite deletes exceeding the 25% mass-delete threshold",
+        help="Confirm proceeding despite deletes exceeding the 10% mass-delete threshold",
     ),
     no_compact: bool = NO_COMPACT_OPTION,
     settings_path: Optional[Path] = SETTINGS_OPTION,

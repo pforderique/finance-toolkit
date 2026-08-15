@@ -30,7 +30,7 @@ from fidelity.src.settings import Settings
 # Deletes beyond this fraction of currently-owned sheet rows require an
 # explicit --yes or --allow-mass-delete (guard #4). A partial/garbled export
 # should never be able to silently wipe most of an account.
-MASS_DELETE_THRESHOLD_RATIO = 0.25
+MASS_DELETE_THRESHOLD_RATIO = 0.10
 
 
 class SyncGuardError(RuntimeError):
@@ -450,7 +450,7 @@ def run_apply(
       2. label validity      (every written Account label is in the live dropdown)
       3. re-read & compare   (optimistic concurrency: sheet must be unchanged
                               since the plan above was computed)
-      4. mass-delete         (deletes > 25% of owned rows need --yes/--allow-mass-delete)
+      4. mass-delete         (deletes > 10% of owned rows need --yes/--allow-mass-delete)
 
     All four are FATAL (raise SyncGuardError) -- none of them are warnings.
     """
