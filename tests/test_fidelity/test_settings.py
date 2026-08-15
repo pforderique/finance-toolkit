@@ -74,7 +74,7 @@ enabled = true
     assert resolved == "Fidelity Brokerage"
 
     # No number given (or unknown number) -> falls back to name match.
-    resolved_by_name = settings.resolve_label(number="", name="individual - tod")
+    resolved_by_name = settings.resolve_label(number="", name="individual")
     # First match by name wins in list order (account 111), case-insensitive.
     assert resolved_by_name == "Fidelity Brokerage"
 
