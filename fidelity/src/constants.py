@@ -24,3 +24,8 @@ ARTIFACTS_DIR = ROOT_DIR / "out"
 
 # Local (non-sheet) record of the last successfully-applied sync.
 SYNC_STATE_PATH = DATA_DIR / "sync_state.json"
+
+# Last time `scheduled-sync` reached a decision on real data. Separate from
+# SYNC_STATE_PATH because a no-op run still counts as "the cadence fired",
+# even though it wrote nothing and so left the sync state alone.
+SCHEDULED_RUN_PATH = DATA_DIR / "scheduled_last_run.json"

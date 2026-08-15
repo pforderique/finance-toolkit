@@ -22,12 +22,17 @@ ALL_FILES = sorted(DATA_DIR.glob("*.csv"))
 if AUG_CSV.exists():
     ALL_FILES = ALL_FILES + [AUG_CSV]
 
-PROJECT_SETTINGS_PATH = Path(__file__).resolve().parents[2] / "fidelity" / "settings.toml"
+FIDELITY_DIR = Path(__file__).resolve().parents[2] / "fidelity"
+PROJECT_SETTINGS_PATH = FIDELITY_DIR / "settings.toml"
+EXAMPLE_SETTINGS_PATH = FIDELITY_DIR / "settings.example.toml"
 
 
 @pytest.fixture
 def settings():
-    return load_settings(PROJECT_SETTINGS_PATH)
+    # settings.toml is gitignored (real account numbers), so fall back to the
+    # tracked example rather than erroring out on a fresh clone.
+    path = PROJECT_SETTINGS_PATH if PROJECT_SETTINGS_PATH.exists() else EXAMPLE_SETTINGS_PATH
+    return load_settings(path)
 
 
 @pytest.mark.parametrize("csv_path", ALL_FILES, ids=lambda p: p.name)

@@ -44,6 +44,9 @@ class FakeDry:
 
 
 def make_settings(tmp_path: Path, **schedule_kwargs) -> Settings:
+    # Default the cadence off so the older gate tests aren't all "not_due";
+    # the cadence itself is covered explicitly below.
+    schedule_kwargs.setdefault("min_days_between_runs", 0.0)
     schedule = ScheduleSettings(
         watch_dir=str(tmp_path),
         csv_glob="Portfolio_Positions_*.csv",
@@ -207,6 +210,126 @@ def test_apply_never_force_approves_mass_delete(tmp_path, monkeypatch, no_email,
     scheduled.run_scheduled(make_settings(tmp_path))
     _, kwargs = spy_apply[0]
     assert kwargs["allow_mass_delete"] is False
+
+
+# -- biweekly cadence -----------------------------------------------------
+
+
+def _stamp(tmp_path: Path, days_ago: float) -> Path:
+    path = tmp_path / "scheduled_last_run.json"
+    scheduled.write_last_run(
+        path, now=datetime.now().astimezone() - timedelta(days=days_ago)
+    )
+    return path
+
+
+def test_off_week_run_is_a_silent_noop(tmp_path, monkeypatch, no_email, spy_apply):
+    """The agent fires weekly; the off-week firing must do nothing at all --
+    no sheet read, no write, no email."""
+    write_csv(tmp_path)
+    stub_dry(monkeypatch, CHANGED, 100.0)
+    called = []
+    monkeypatch.setattr(
+        scheduled.workflow, "run_dry_run", lambda *a, **kw: called.append(1)
+    )
+
+    result = scheduled.run_scheduled(
+        make_settings(tmp_path, min_days_between_runs=13.0),
+        last_run_path=_stamp(tmp_path, days_ago=7),
+    )
+
+    assert result.status == "not_due"
+    assert result.exit_code == 0
+    assert called == [], "an off-week run must not even touch the sheet"
+    assert spy_apply == []
+    assert no_email == []
+
+
+def test_on_week_run_proceeds(tmp_path, monkeypatch, no_email, spy_apply):
+    write_csv(tmp_path)
+    stub_dry(monkeypatch, CHANGED, 100.0)
+    result = scheduled.run_scheduled(
+        make_settings(tmp_path, min_days_between_runs=13.0),
+        last_run_path=_stamp(tmp_path, days_ago=14),
+    )
+    assert result.status == "applied"
+    assert len(spy_apply) == 1
+
+
+def test_first_ever_run_proceeds(tmp_path, monkeypatch, no_email, spy_apply):
+    write_csv(tmp_path)
+    stub_dry(monkeypatch, CHANGED, 100.0)
+    result = scheduled.run_scheduled(
+        make_settings(tmp_path, min_days_between_runs=13.0),
+        last_run_path=tmp_path / "never_written.json",
+    )
+    assert result.status == "applied"
+
+
+def test_corrupt_cadence_state_fails_toward_running(tmp_path, monkeypatch, no_email, spy_apply):
+    write_csv(tmp_path)
+    stub_dry(monkeypatch, CHANGED, 100.0)
+    bad = tmp_path / "scheduled_last_run.json"
+    bad.write_text("{not json")
+    result = scheduled.run_scheduled(
+        make_settings(tmp_path, min_days_between_runs=13.0), last_run_path=bad
+    )
+    assert result.status == "applied"
+
+
+def test_force_bypasses_cadence(tmp_path, monkeypatch, no_email, spy_apply):
+    write_csv(tmp_path)
+    stub_dry(monkeypatch, CHANGED, 100.0)
+    result = scheduled.run_scheduled(
+        make_settings(tmp_path, min_days_between_runs=13.0),
+        force=True,
+        last_run_path=_stamp(tmp_path, days_ago=1),
+    )
+    assert result.status == "applied"
+
+
+def test_applied_run_stamps_the_cadence(tmp_path, monkeypatch, no_email, spy_apply):
+    write_csv(tmp_path)
+    stub_dry(monkeypatch, CHANGED, 100.0)
+    stamp = tmp_path / "scheduled_last_run.json"
+    scheduled.run_scheduled(
+        make_settings(tmp_path, min_days_between_runs=13.0), last_run_path=stamp
+    )
+    assert scheduled.read_last_run(stamp) is not None
+
+
+def test_noop_run_stamps_the_cadence(tmp_path, monkeypatch, no_email, spy_apply):
+    """Confirming the sheet is already correct consumes the cycle."""
+    write_csv(tmp_path)
+    stub_dry(monkeypatch, NOOP, 0.0)
+    stamp = tmp_path / "scheduled_last_run.json"
+    scheduled.run_scheduled(
+        make_settings(tmp_path, min_days_between_runs=13.0), last_run_path=stamp
+    )
+    assert scheduled.read_last_run(stamp) is not None
+
+
+def test_held_run_does_not_stamp_the_cadence(tmp_path, monkeypatch, no_email, spy_apply):
+    """A held run wrote nothing, so the next Friday should retry rather than
+    wait another two weeks."""
+    write_csv(tmp_path)
+    stub_dry(monkeypatch, CHANGED, 50_000.0)
+    stamp = tmp_path / "scheduled_last_run.json"
+    scheduled.run_scheduled(
+        make_settings(tmp_path, min_days_between_runs=13.0, max_net_equity_delta=10_000.0),
+        last_run_path=stamp,
+    )
+    assert scheduled.read_last_run(stamp) is None
+
+
+def test_stale_csv_does_not_stamp_the_cadence(tmp_path, no_email, spy_apply):
+    write_csv(tmp_path, age_hours=99)
+    stamp = tmp_path / "scheduled_last_run.json"
+    scheduled.run_scheduled(
+        make_settings(tmp_path, min_days_between_runs=13.0, max_age_hours=36.0),
+        last_run_path=stamp,
+    )
+    assert scheduled.read_last_run(stamp) is None
 
 
 # -- failure paths --------------------------------------------------------

@@ -82,6 +82,10 @@ class ScheduleSettings:
     csv_glob: str = "Portfolio_Positions_*.csv"
     max_age_hours: float = 36.0
     max_net_equity_delta: float = 10_000.0
+    # launchd can only say "every Friday", so the biweekly cadence is enforced
+    # here: the agent fires weekly and the run bails unless this many days have
+    # passed. 13, not 14, so a run that starts a few minutes early still counts.
+    min_days_between_runs: float = 13.0
 
     def resolved_watch_dir(self) -> Path:
         return Path(self.watch_dir).expanduser()
@@ -165,6 +169,7 @@ class Settings:
                 "csv_glob": self.schedule.csv_glob,
                 "max_age_hours": self.schedule.max_age_hours,
                 "max_net_equity_delta": self.schedule.max_net_equity_delta,
+                "min_days_between_runs": self.schedule.min_days_between_runs,
             },
             "accounts": [acct.to_dict() for acct in self.accounts],
         }
@@ -260,6 +265,7 @@ def load_settings(path: Optional[Path] = None) -> Settings:
         csv_glob=str(schedule_raw.get("csv_glob", "Portfolio_Positions_*.csv")),
         max_age_hours=float(schedule_raw.get("max_age_hours", 36.0)),
         max_net_equity_delta=float(schedule_raw.get("max_net_equity_delta", 10_000.0)),
+        min_days_between_runs=float(schedule_raw.get("min_days_between_runs", 13.0)),
     )
 
     accounts_raw = data.get("accounts", [])

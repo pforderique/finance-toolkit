@@ -360,15 +360,24 @@ All commands accept `--settings PATH` to point at a different
 
 ## Scheduled runs
 
-`fidelity scheduled-sync` is the unattended path: a LaunchAgent runs it at
-4:30pm ET on weekdays (after market close), it picks up whatever positions CSV
-you last downloaded, and it syncs — but only if nothing looks wrong.
+`fidelity scheduled-sync` is the unattended path: a LaunchAgent runs it **every
+other Friday at 4:30pm** (after market close), it picks up whatever positions
+CSV you last downloaded, and it syncs — but only if nothing looks wrong.
+
+launchd can't express "every two weeks", so the agent fires *every* Friday and
+the tool drops the off-week runs itself: if fewer than
+`[schedule].min_days_between_runs` (default 13) days have passed since the last
+run that actually saw the sheet, it exits immediately — no sheet read, no
+email. The clock only advances on a run that applied or confirmed a no-op, so a
+Friday spent held or erroring doesn't burn the slot; the next Friday retries
+instead of waiting another two weeks.
 
 Because nobody is watching, it is deliberately more paranoid than `sync`. It
 **dry runs first, every time**, and applies only if all of these hold:
 
 | Gate | If it trips |
 |---|---|
+| At least `min_days_between_runs` since the last run | silent skip |
 | A CSV matching `[schedule].csv_glob` exists in `watch_dir` | email, no write |
 | That CSV is newer than `max_age_hours` (default 36h) | email, no write |
 | The dry run succeeds (auth, sheet shape, parse) | email, no write, exit 1 |
@@ -392,11 +401,15 @@ false on this path, so a garbled export becomes an email, not a wipe.
 
 ```toml
 [schedule]
-watch_dir            = "~/Downloads"
-csv_glob             = "Portfolio_Positions_*.csv"
-max_age_hours        = 36.0
-max_net_equity_delta = 10000.0
+watch_dir             = "~/Downloads"
+csv_glob              = "Portfolio_Positions_*.csv"
+max_age_hours         = 36.0
+max_net_equity_delta  = 10000.0
+min_days_between_runs = 13.0   # biweekly; set to 0 for every Friday
 ```
+
+Cadence state lives in `fidelity/data/scheduled_last_run.json` (gitignored).
+Delete it to make the next Friday run unconditionally.
 
 The newest match **by mtime** wins (a re-download of an older-dated file is
 still fresh data).
@@ -433,7 +446,7 @@ tail -20 ~/Library/Logs/fidelity_sync.log
 
 To disable: `launchctl unload ~/Library/LaunchAgents/com.pfo.fidelity_sync.plist`.
 
-Note the schedule is in **local machine time** — the 16:30 entry assumes the
+Note the schedule is in **local machine time** — the Friday 16:30 entry assumes the
 machine is on US Eastern. Adjust the hour if you're elsewhere. If the Mac is
 asleep at the scheduled time, launchd runs the job when it next wakes; the
 staleness gate is what keeps a delayed run from applying an old CSV.

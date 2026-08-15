@@ -7,12 +7,19 @@ one manual `fidelity sync`, a bad unattended write costs a restore from the
 `out/*_before.json` artifact.
 
 Gates, in order:
-  1. No CSV matching the glob in the watch dir      -> email, skip
-  2. Newest CSV is older than `max_age_hours`       -> email, skip
-  3. Dry run raises (auth, sheet shape, parse)      -> email, skip
-  4. |net equity delta| > `max_net_equity_delta`    -> email, skip
-  5. Plan is a no-op                                -> log, skip (no email)
-  6. A pre-flight guard trips inside run_apply      -> email, skip
+  1. Less than `min_days_between_runs` since the last one -> silent skip
+  2. No CSV matching the glob in the watch dir      -> email, skip
+  3. Newest CSV is older than `max_age_hours`       -> email, skip
+  4. Dry run raises (auth, sheet shape, parse)      -> email, skip
+  5. |net equity delta| > `max_net_equity_delta`    -> email, skip
+  6. Plan is a no-op                                -> log, skip (no email)
+  7. A pre-flight guard trips inside run_apply      -> email, skip
+
+Gate 1 is what makes the job biweekly: launchd's StartCalendarInterval can only
+express "every Friday", so the agent fires weekly and this check drops every
+other one. The interval is measured from the last run that actually saw the
+sheet (applied or confirmed-no-op), so a Friday spent held or erroring doesn't
+consume the slot -- the next Friday retries instead of waiting two more weeks.
 
 Mass deletes are never force-approved here: `allow_mass_delete` stays False, so
 guard #4 of `run_apply` remains armed and a mass delete becomes case 6.
@@ -20,6 +27,7 @@ guard #4 of `run_apply` remains armed and a mass delete becomes case 6.
 
 from __future__ import annotations
 
+import json
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -27,7 +35,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .settings import Settings
-from . import workflow
+from . import constants, workflow
 
 
 @dataclass
@@ -65,6 +73,26 @@ def find_latest_csv(watch_dir: Path, pattern: str) -> Optional[Path]:
         return None
 
 
+def read_last_run(path: Optional[Path] = None) -> Optional[datetime]:
+    """When `scheduled-sync` last reached a decision, or None if never."""
+
+    target = Path(path) if path is not None else constants.SCHEDULED_RUN_PATH
+    try:
+        return datetime.fromisoformat(json.loads(target.read_text())["timestamp"])
+    except (OSError, ValueError, KeyError, json.JSONDecodeError):
+        # Missing or corrupt state means "never ran" -- fail toward running,
+        # since the write path has its own guards and a skipped cycle is worse.
+        return None
+
+
+def write_last_run(path: Optional[Path] = None, now: Optional[datetime] = None) -> Path:
+    target = Path(path) if path is not None else constants.SCHEDULED_RUN_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    stamp = (now or datetime.now()).astimezone().isoformat()
+    target.write_text(json.dumps({"timestamp": stamp}, indent=2), encoding="utf-8")
+    return target
+
+
 def _send(subject: str, body: str) -> bool:
     """Email via the toolkit's existing SMTP channel. Never raises."""
 
@@ -94,11 +122,30 @@ def run_scheduled(
     settings: Settings,
     compact: bool = True,
     force: bool = False,
+    last_run_path: Optional[Path] = None,
 ) -> ScheduledResult:
-    """Run the gated unattended sync. `force` bypasses only the delta tripwire."""
+    """Run the gated unattended sync.
+
+    `force` bypasses both the biweekly cadence check and the delta tripwire --
+    it means "I am asking for this run on purpose". It never relaxes the
+    write-path guards in `run_apply`.
+    """
 
     sched = settings.schedule
     watch_dir = sched.resolved_watch_dir()
+
+    if not force:
+        last_run = read_last_run(last_run_path)
+        if last_run is not None:
+            elapsed_days = (datetime.now().astimezone() - last_run).total_seconds() / 86400
+            if elapsed_days < sched.min_days_between_runs:
+                # Silent: the weekly agent firing on an off-week is the design
+                # working, not an event worth an email.
+                return ScheduledResult(
+                    "not_due",
+                    f"Last run was {elapsed_days:.1f}d ago "
+                    f"(cadence: {sched.min_days_between_runs:.0f}d)",
+                )
 
     csv_path = find_latest_csv(watch_dir, sched.csv_glob)
     if csv_path is None:
@@ -135,6 +182,9 @@ def run_scheduled(
     delta = dry.plan.net_equity_delta()
 
     if not any(counts.get(k, 0) for k in ("adds", "updates", "deletes")):
+        # Confirming the sheet is already correct consumes the cycle -- there
+        # was nothing to do, not something we failed to do.
+        write_last_run(last_run_path)
         return ScheduledResult(
             "no_changes", "Sheet already matches the CSV", csv_path=csv_path,
             counts=counts, net_equity_delta=delta,
@@ -184,6 +234,7 @@ def run_scheduled(
             net_equity_delta=delta, emailed=emailed,
         )
 
+    write_last_run(last_run_path)
     return ScheduledResult(
         "applied", "Applied", csv_path=csv_path, counts=counts, net_equity_delta=delta,
     )

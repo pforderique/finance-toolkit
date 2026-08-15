@@ -2,10 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
        "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Unattended Fidelity -> Portfolio sheet sync, weekdays at 4:30pm local
-  (market close + 30min). The job dry runs first and only writes if every gate
-  in `fidelity scheduled-sync` passes; otherwise it emails and leaves the sheet
-  alone. See fidelity/README.md -> "Scheduled runs".
+  Unattended Fidelity -> Portfolio sheet sync, every other Friday at 4:30pm
+  local (market close + 30min). The job dry runs first and only writes if every
+  gate in `fidelity scheduled-sync` passes; otherwise it emails and leaves the
+  sheet alone. See fidelity/README.md -> "Scheduled runs".
 
   Install:
     cp fidelity/com.pfo.fidelity_sync.plist ~/Library/LaunchAgents/
@@ -41,28 +41,14 @@
       <string>/Users/pfo/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
 
+    <!--
+      Fires every Friday at 4:30pm local. The *biweekly* cadence is enforced in
+      the tool, not here: launchd has no "every other week" expression, so
+      `scheduled-sync` exits early unless [schedule].min_days_between_runs has
+      elapsed. Off-week firings are silent no-ops.
+    -->
     <key>StartCalendarInterval</key>
     <array>
-      <dict>
-        <key>Hour</key><integer>16</integer>
-        <key>Minute</key><integer>30</integer>
-        <key>Weekday</key><integer>1</integer>
-      </dict>
-      <dict>
-        <key>Hour</key><integer>16</integer>
-        <key>Minute</key><integer>30</integer>
-        <key>Weekday</key><integer>2</integer>
-      </dict>
-      <dict>
-        <key>Hour</key><integer>16</integer>
-        <key>Minute</key><integer>30</integer>
-        <key>Weekday</key><integer>3</integer>
-      </dict>
-      <dict>
-        <key>Hour</key><integer>16</integer>
-        <key>Minute</key><integer>30</integer>
-        <key>Weekday</key><integer>4</integer>
-      </dict>
       <dict>
         <key>Hour</key><integer>16</integer>
         <key>Minute</key><integer>30</integer>

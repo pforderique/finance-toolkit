@@ -216,7 +216,10 @@ def scheduled_sync(
     settings_path: Optional[Path] = SETTINGS_OPTION,
     no_compact: bool = NO_COMPACT_OPTION,
     force: bool = typer.Option(
-        False, "--force", help="Bypass the net-equity-delta tripwire (guards still apply)"
+        False,
+        "--force",
+        help="Run now regardless of the biweekly cadence and the net-equity-delta "
+             "tripwire (write-path guards still apply)",
     ),
 ):
     settings = _load_settings_or_exit(settings_path)
