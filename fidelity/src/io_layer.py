@@ -43,8 +43,22 @@ def read_input_csv(path: Path) -> List[dict]:
     return rows
 
 
+# Set from settings.toml's [auth].service_account_json by the CLI at startup.
+# Takes precedence over the env vars, which stay supported for existing setups.
+_CONFIGURED_CREDENTIALS_PATH: Optional[Path] = None
+
+
+def set_credentials_path(path: Optional[Path]) -> None:
+    """Point auth at a key file from settings.toml. Resets the cached client."""
+    global _CONFIGURED_CREDENTIALS_PATH
+    if path != _CONFIGURED_CREDENTIALS_PATH:
+        _get_sheets_service.cache_clear()
+    _CONFIGURED_CREDENTIALS_PATH = path
+
+
 def _resolve_credentials_path() -> Optional[Path]:
     candidates = [
+        str(_CONFIGURED_CREDENTIALS_PATH) if _CONFIGURED_CREDENTIALS_PATH else None,
         os.getenv(constants.ENV_SERVICE_ACCOUNT_JSON),
         os.getenv(constants.ENV_CREDENTIALS_PATH),
     ]
@@ -61,8 +75,8 @@ def _load_service_account_credentials():
     credentials_path = _resolve_credentials_path()
     if credentials_path is None:
         raise RuntimeError(
-            "Service account credentials not configured. Set GOOGLE_SERVICE_ACCOUNT_JSON "
-            "or GOOGLE_APPLICATION_CREDENTIALS."
+            "Service account key not found. Set [auth].service_account_json in "
+            "settings.toml to the path of your downloaded JSON key."
         )
     try:
         raw = json.loads(credentials_path.read_text(encoding="utf-8"))

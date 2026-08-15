@@ -1,20 +1,27 @@
-# Copy this file to `settings.toml` and fill in your own values.
+# Copy this file to `settings.toml` and fill in your own values:
 #
 #   cp fidelity/settings.example.toml fidelity/settings.toml
 #
-# `settings.toml` is gitignored on purpose -- it holds your real spreadsheet id
-# and your real Fidelity account numbers. Never commit it.
+# `settings.toml` is gitignored on purpose -- it holds your real spreadsheet id,
+# your real Fidelity account numbers, and the path to your Google key. Never
+# commit it. This is the only file you need to set up.
+
+[auth]
+# Path to the service-account JSON key you downloaded from Google Cloud.
+# See "Google access" in the README for how to create one.
+service_account_json = "/absolute/path/to/service-account.json"
 
 [sheet]
 # The long id in your sheet's URL:
 # https://docs.google.com/spreadsheets/d/<THIS PART>/edit
 spreadsheet_id = "YOUR_SPREADSHEET_ID_HERE"
+# The tab holding the table, and the table's name.
 tab = "Portfolio"
 table = "INVESTMENT_HOLDINGS"
 
 [symbols]
-# Money-market/cash tickers are skipped -- they have a value but no share count,
-# so they can't be represented as a holding. See "Cash is not synced" in README.
+# Tickers the tool ignores completely. Money-market/cash rows have a dollar
+# value but no share count, so they can't be a row in a holdings table.
 ignore_prefixes = [
     "SPAXX",
     "FDRXX",
@@ -27,14 +34,6 @@ ignore_exact = [
 # Fidelity's CSV symbol -> the ticker your sheet uses.
 BRKB = "BRK.B"
 
-[schedule]
-# Used only by `fidelity scheduled-sync` (the LaunchAgent job).
-watch_dir            = "~/Downloads"
-csv_glob             = "Portfolio_Positions_*.csv"
-max_age_hours        = 36.0
-# A plan moving the portfolio by more than this is emailed, never auto-applied.
-max_net_equity_delta = 10000.0
-
 [tolerance]
 # How far a value can drift before it counts as a change. avg_cost is half a
 # cent because Fidelity reports it to 2dp.
@@ -44,6 +43,7 @@ avg_cost = 0.005
 # One block per Fidelity account. `number` and `name` come from the first two
 # columns of the positions CSV; `label` must exactly match one of the Account
 # dropdown options in your sheet (`fidelity accounts labels` lists them).
+# `number` is matched first, then `name` (Fidelity renames accounts sometimes).
 [[accounts]]
 number = "X00000000"
 name = "Individual"

@@ -21,3 +21,6 @@ research/
 # Personal config: real spreadsheet ids + Fidelity account numbers.
 # Track fidelity/settings.example.toml instead.
 fidelity/settings.toml
+
+# Personal LaunchAgent: paths and schedule are machine-specific.
+fidelity/com.pfo.fidelity_sync.plist

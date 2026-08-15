@@ -45,7 +45,11 @@ SETTINGS_OPTION = typer.Option(
 
 def _load_settings_or_exit(settings_path: Optional[Path]) -> Settings:
     try:
-        return load_settings(settings_path)
+        settings = load_settings(settings_path)
+        # Auth reads from settings.toml so there's only one private file to set
+        # up; env vars remain the fallback when [auth] is left blank.
+        io_layer.set_credentials_path(settings.auth.resolved_path())
+        return settings
     except SettingsError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from exc

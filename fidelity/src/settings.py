@@ -49,6 +49,23 @@ class AccountMapping:
 
 
 @dataclass
+class AuthSettings:
+    """Where the Google service-account key lives.
+
+    Kept here rather than in an env var so a new user has exactly one private
+    file to set up. Empty means "fall back to GOOGLE_SERVICE_ACCOUNT_JSON /
+    GOOGLE_APPLICATION_CREDENTIALS", which is what existing setups use.
+    """
+
+    service_account_json: str = ""
+
+    def resolved_path(self) -> Optional[Path]:
+        if not self.service_account_json.strip():
+            return None
+        return Path(self.service_account_json).expanduser()
+
+
+@dataclass
 class SheetSettings:
     spreadsheet_id: str
     tab: str = "Portfolio"
@@ -101,6 +118,7 @@ class Settings:
     accounts: List[AccountMapping]
     path: Path
     schedule: ScheduleSettings = field(default_factory=ScheduleSettings)
+    auth: AuthSettings = field(default_factory=AuthSettings)
 
     # -- lookups -----------------------------------------------------
     def find_by_number(self, number: str) -> Optional[AccountMapping]:
@@ -150,6 +168,9 @@ class Settings:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "auth": {
+                "service_account_json": self.auth.service_account_json,
+            },
             "sheet": {
                 "spreadsheet_id": self.sheet.spreadsheet_id,
                 "tab": self.sheet.tab,
@@ -231,6 +252,13 @@ def load_settings(path: Optional[Path] = None) -> Settings:
     except OSError as exc:
         raise SettingsError(f"{settings_path}: could not read file ({exc})") from exc
 
+    auth_raw = data.get("auth", {})
+    if not isinstance(auth_raw, dict):
+        raise SettingsError(f"{settings_path}: [auth] must be a table")
+    auth = AuthSettings(
+        service_account_json=str(auth_raw.get("service_account_json", "")),
+    )
+
     sheet_raw = data.get("sheet", {})
     if not isinstance(sheet_raw, dict):
         raise SettingsError(f"{settings_path}: [sheet] must be a table")
@@ -299,6 +327,7 @@ def load_settings(path: Optional[Path] = None) -> Settings:
         accounts=accounts,
         path=settings_path,
         schedule=schedule,
+        auth=auth,
     )
     _validate(settings)
     return settings
