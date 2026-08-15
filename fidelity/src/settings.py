@@ -69,6 +69,25 @@ class ToleranceSettings:
 
 
 @dataclass
+class ScheduleSettings:
+    """Config for the unattended LaunchAgent run (`fidelity scheduled-sync`).
+
+    `max_net_equity_delta` is the tripwire: a plan that moves the portfolio by
+    more than this much in either direction is emailed, not applied. It exists
+    because the damage from a bad unattended write is unbounded, while the cost
+    of a skipped day is one manual `fidelity sync`.
+    """
+
+    watch_dir: str = "~/Downloads"
+    csv_glob: str = "Portfolio_Positions_*.csv"
+    max_age_hours: float = 36.0
+    max_net_equity_delta: float = 10_000.0
+
+    def resolved_watch_dir(self) -> Path:
+        return Path(self.watch_dir).expanduser()
+
+
+@dataclass
 class Settings:
     """Fully parsed & validated settings.toml."""
 
@@ -77,6 +96,7 @@ class Settings:
     tolerance: ToleranceSettings
     accounts: List[AccountMapping]
     path: Path
+    schedule: ScheduleSettings = field(default_factory=ScheduleSettings)
 
     # -- lookups -----------------------------------------------------
     def find_by_number(self, number: str) -> Optional[AccountMapping]:
@@ -140,6 +160,12 @@ class Settings:
                 "shares": self.tolerance.shares,
                 "avg_cost": self.tolerance.avg_cost,
             },
+            "schedule": {
+                "watch_dir": self.schedule.watch_dir,
+                "csv_glob": self.schedule.csv_glob,
+                "max_age_hours": self.schedule.max_age_hours,
+                "max_net_equity_delta": self.schedule.max_net_equity_delta,
+            },
             "accounts": [acct.to_dict() for acct in self.accounts],
         }
 
@@ -183,7 +209,14 @@ def load_settings(path: Optional[Path] = None) -> Settings:
     settings_path = Path(path) if path is not None else DEFAULT_SETTINGS_PATH
 
     if not settings_path.exists():
-        raise SettingsError(f"Settings file not found: {settings_path}")
+        example = settings_path.parent / "settings.example.toml"
+        hint = (
+            f"\n\nFirst-time setup? Copy the example and edit it:\n"
+            f"  cp {example} {settings_path}"
+            if example.exists()
+            else ""
+        )
+        raise SettingsError(f"Settings file not found: {settings_path}{hint}")
 
     try:
         raw_bytes = settings_path.read_bytes()
@@ -219,6 +252,16 @@ def load_settings(path: Optional[Path] = None) -> Settings:
         avg_cost=float(tolerance_raw.get("avg_cost", 0.005)),
     )
 
+    schedule_raw = data.get("schedule", {})
+    if not isinstance(schedule_raw, dict):
+        raise SettingsError(f"{settings_path}: [schedule] must be a table")
+    schedule = ScheduleSettings(
+        watch_dir=str(schedule_raw.get("watch_dir", "~/Downloads")),
+        csv_glob=str(schedule_raw.get("csv_glob", "Portfolio_Positions_*.csv")),
+        max_age_hours=float(schedule_raw.get("max_age_hours", 36.0)),
+        max_net_equity_delta=float(schedule_raw.get("max_net_equity_delta", 10_000.0)),
+    )
+
     accounts_raw = data.get("accounts", [])
     if not isinstance(accounts_raw, list):
         raise SettingsError(f"{settings_path}: [[accounts]] must be an array of tables")
@@ -249,6 +292,7 @@ def load_settings(path: Optional[Path] = None) -> Settings:
         tolerance=tolerance,
         accounts=accounts,
         path=settings_path,
+        schedule=schedule,
     )
     _validate(settings)
     return settings

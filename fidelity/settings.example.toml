@@ -1,0 +1,71 @@
+# Copy this file to `settings.toml` and fill in your own values.
+#
+#   cp fidelity/settings.example.toml fidelity/settings.toml
+#
+# `settings.toml` is gitignored on purpose -- it holds your real spreadsheet id
+# and your real Fidelity account numbers. Never commit it.
+
+[sheet]
+# The long id in your sheet's URL:
+# https://docs.google.com/spreadsheets/d/<THIS PART>/edit
+spreadsheet_id = "YOUR_SPREADSHEET_ID_HERE"
+tab = "Portfolio"
+table = "INVESTMENT_HOLDINGS"
+
+[symbols]
+# Money-market/cash tickers are skipped -- they have a value but no share count,
+# so they can't be represented as a holding. See "Cash is not synced" in README.
+ignore_prefixes = [
+    "SPAXX",
+    "FDRXX",
+]
+ignore_exact = [
+    "PENDING ACTIVITY",
+]
+
+[symbols.aliases]
+# Fidelity's CSV symbol -> the ticker your sheet uses.
+BRKB = "BRK.B"
+
+[schedule]
+# Used only by `fidelity scheduled-sync` (the LaunchAgent job).
+watch_dir            = "~/Downloads"
+csv_glob             = "Portfolio_Positions_*.csv"
+max_age_hours        = 36.0
+# A plan moving the portfolio by more than this is emailed, never auto-applied.
+max_net_equity_delta = 10000.0
+
+[tolerance]
+# How far a value can drift before it counts as a change. avg_cost is half a
+# cent because Fidelity reports it to 2dp.
+shares = 1e-06
+avg_cost = 0.005
+
+# One block per Fidelity account. `number` and `name` come from the first two
+# columns of the positions CSV; `label` must exactly match one of the Account
+# dropdown options in your sheet (`fidelity accounts labels` lists them).
+[[accounts]]
+number = "X00000000"
+name = "Individual"
+label = "Fidelity Brokerage"
+enabled = true
+
+[[accounts]]
+number = "000000001"
+name = "ROTH IRA"
+label = "Fidelity Roth IRA"
+enabled = true
+
+[[accounts]]
+number = "000000002"
+name = "Health Savings Account"
+label = "Fidelity HSA"
+enabled = true
+
+# `enabled = false` keeps an account's rows out of scope entirely: its holdings
+# are reported as "untouched" and are never added, updated, or deleted.
+[[accounts]]
+number = "000000003"
+name = "Traditional IRA"
+label = "Fidelity Brokerage"
+enabled = false

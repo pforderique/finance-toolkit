@@ -1,8 +1,7 @@
-"""Logging configuration and console helpers for the Fidelity tool."""
+"""Console helpers (rich output formatting) for the Fidelity tool."""
 
-import logging
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from rich.console import Console
 from rich.table import Table
@@ -24,12 +23,28 @@ custom_theme = Theme(
 console = Console(theme=custom_theme)
 
 
-def configure_logging(level: str) -> None:
-    """Configure structured logging for the CLI."""
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+def humanize_age(then: datetime, now: Optional[datetime] = None) -> str:
+    """Render the elapsed time between `then` and `now` (default: now) as a
+    short relative string, e.g. "3 days ago", "2 hours ago", "just now"."""
+    now = now or datetime.now(then.tzinfo)
+    seconds = max((now - then).total_seconds(), 0.0)
+
+    if seconds < 60:
+        return "just now"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    hours = int(seconds // 3600)
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = int(seconds // 86400)
+    if days < 30:
+        return f"{days} day{'s' if days != 1 else ''} ago"
+    months = int(days // 30)
+    if months < 12:
+        return f"{months} month{'s' if months != 1 else ''} ago"
+    years = int(days // 365)
+    return f"{years} year{'s' if years != 1 else ''} ago"
 
 
 def print_header(text: str) -> None:

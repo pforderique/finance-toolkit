@@ -161,7 +161,9 @@ def test_guard4_mass_delete_requires_yes_or_allow_flag(tmp_path, settings, monke
     # Passing --yes clears guard #4; patch the write itself to a no-op so the
     # test doesn't touch the network for the final write call.
     monkeypatch.setattr(workflow.io_layer, "write_table_block", lambda *a, **k: {"ok": True})
-    result = run_apply(csv_path, settings, write_artifacts=False, yes=True)
+    result = run_apply(
+        csv_path, settings, write_artifacts=False, yes=True, state_path=tmp_path / "sync_state.json"
+    )
     assert result.applied is True
     assert len(result.plan.deletes) == 4
 
@@ -177,7 +179,9 @@ def test_guard4_allow_mass_delete_flag_also_clears_guard(tmp_path, settings, mon
 
     csv_path = _write_csv(tmp_path, ["111,Individual,ZZZZ,Zeta,1,1,1,\n"])
 
-    result = run_apply(csv_path, settings, write_artifacts=False, allow_mass_delete=True)
+    result = run_apply(
+        csv_path, settings, write_artifacts=False, allow_mass_delete=True, state_path=tmp_path / "sync_state.json"
+    )
     assert result.applied is True
 
 
@@ -194,13 +198,15 @@ def test_successful_apply_writes_artifacts(tmp_path, settings, monkeypatch):
 
     csv_path = _write_csv(tmp_path, ["111,Individual,AAPL,Apple,2,100,200,\n"])
     artifacts_dir = tmp_path / "out"
+    state_path = tmp_path / "sync_state.json"
 
-    result = run_apply(csv_path, settings, artifacts_dir=artifacts_dir)
+    result = run_apply(csv_path, settings, artifacts_dir=artifacts_dir, state_path=state_path)
 
     assert result.applied is True
     assert len(write_calls) == 1
     assert result.before_path is not None and result.before_path.exists()
     assert result.changes_path is not None and result.changes_path.exists()
+    assert state_path.exists()
 
     import json
 

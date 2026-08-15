@@ -22,5 +22,5 @@ ROOT_DIR = Path(__file__).parent.parent
 DATA_DIR = ROOT_DIR / "data"
 ARTIFACTS_DIR = ROOT_DIR / "out"
 
-# Logging
-DEFAULT_LOG_LEVEL = "INFO"
+# Local (non-sheet) record of the last successfully-applied sync.
+SYNC_STATE_PATH = DATA_DIR / "sync_state.json"

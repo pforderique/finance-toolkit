@@ -17,3 +17,7 @@ ms_screener/artifacts/
 research/**/config.json
 research/
 **/.DS_Store
+
+# Personal config: real spreadsheet ids + Fidelity account numbers.
+# Track fidelity/settings.example.toml instead.
+fidelity/settings.toml

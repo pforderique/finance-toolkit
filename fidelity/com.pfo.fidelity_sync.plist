@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+       "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Unattended Fidelity -> Portfolio sheet sync, weekdays at 4:30pm local
+  (market close + 30min). The job dry runs first and only writes if every gate
+  in `fidelity scheduled-sync` passes; otherwise it emails and leaves the sheet
+  alone. See fidelity/README.md -> "Scheduled runs".
+
+  Install:
+    cp fidelity/com.pfo.fidelity_sync.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.pfo.fidelity_sync.plist
+-->
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.pfo.fidelity_sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/Users/pfo/.local/bin/uv</string>
+      <string>run</string>
+      <string>python</string>
+      <string>-m</string>
+      <string>fidelity.main</string>
+      <string>scheduled-sync</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pfo/ws/finance/finance-toolkit</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/pfo/Library/Logs/fidelity_sync.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/pfo/Library/Logs/fidelity_sync.err</string>
+
+    <!-- launchd starts jobs with a near-empty PATH; uv needs a real one. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PATH</key>
+      <string>/Users/pfo/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <array>
+      <dict>
+        <key>Hour</key><integer>16</integer>
+        <key>Minute</key><integer>30</integer>
+        <key>Weekday</key><integer>1</integer>
+      </dict>
+      <dict>
+        <key>Hour</key><integer>16</integer>
+        <key>Minute</key><integer>30</integer>
+        <key>Weekday</key><integer>2</integer>
+      </dict>
+      <dict>
+        <key>Hour</key><integer>16</integer>
+        <key>Minute</key><integer>30</integer>
+        <key>Weekday</key><integer>3</integer>
+      </dict>
+      <dict>
+        <key>Hour</key><integer>16</integer>
+        <key>Minute</key><integer>30</integer>
+        <key>Weekday</key><integer>4</integer>
+      </dict>
+      <dict>
+        <key>Hour</key><integer>16</integer>
+        <key>Minute</key><integer>30</integer>
+        <key>Weekday</key><integer>5</integer>
+      </dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+  </dict>
+</plist>

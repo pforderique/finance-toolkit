@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from fidelity.src import constants, io_layer, preprocess
+from fidelity.src import constants, io_layer, preprocess, sync_state
 from fidelity.src.datamodel import (
     ChangeEntry,
     ChangePlan,
@@ -441,6 +441,7 @@ def run_apply(
     allow_mass_delete: bool = False,
     write_artifacts: bool = True,
     artifacts_dir: Optional[Path] = None,
+    state_path: Optional[Path] = None,
 ) -> SyncResult:
     """Recompute the plan, run every pre-flight guard, and -- only if all of
     them pass -- issue the single write. Guard order matches the plan:
@@ -503,6 +504,16 @@ def run_apply(
         before_path = write_before_artifact(sid, dry.table_info, artifacts_dir=artifacts_dir, timestamp=ts)
 
     io_layer.write_table_block(sid, dry.table_info, target_rows)
+
+    # Record local last-synced state (never on a dry run/diff -- only here,
+    # after a real write has actually succeeded).
+    sync_state.write_sync_state(
+        csv_name=Path(csv_path).name,
+        counts=dry.plan.counts(),
+        net_equity_delta=dry.plan.net_equity_delta(),
+        path=state_path,
+        timestamp=datetime.now().astimezone().isoformat(),
+    )
 
     changes_path: Optional[Path] = None
     if write_artifacts:
