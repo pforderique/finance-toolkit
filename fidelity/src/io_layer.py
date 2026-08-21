@@ -247,7 +247,10 @@ def read_table_block(spreadsheet_id: str, table_info: TableInfo) -> List[SheetRo
 
         rows.append(
             SheetRow(
-                ticker=ticker.upper(),
+                # Verbatim, not upper-cased: the block can legitimately hold a
+                # non-ticker label ("Cash"), and force-casing it here would make
+                # every sync see a key mismatch and churn delete+add forever.
+                ticker=ticker,
                 account_label=account_label,
                 shares=_coerce_float(padded[shares_idx]),
                 avg_cost=_coerce_float(padded[avg_cost_idx]),

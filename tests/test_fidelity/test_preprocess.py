@@ -1,10 +1,10 @@
 """Tests for fidelity.src.preprocess against real Fidelity CSV exports.
 
 Covers: header normalization across Title Case / sentence case exports, alias
-application, filter ordering (disclaimers/blank lines/SPAXX/FDRXX vanish
-silently), account resolution (Traditional IRA never warns because it's
-prefix-filtered before account resolution), aggregation, and the two
-data-loss protection sets.
+application, filter ordering (disclaimers and blank lines vanish silently),
+money-market rows folding into a single Cash holding per account, account
+resolution (Traditional IRA never warns because it's mapped-but-disabled),
+aggregation, and the two data-loss protection sets.
 """
 
 from pathlib import Path
@@ -44,10 +44,9 @@ def test_parses_without_error(csv_path: Path, settings):
 
 @pytest.mark.parametrize("csv_path", ALL_FILES, ids=lambda p: p.name)
 def test_traditional_ira_never_warns(csv_path: Path, settings):
-    """Traditional IRA (000000003) is a mapped-but-disabled account that in every
-    sample file holds only SPAXX/SPAXX**. The prefix filter must run BEFORE the
-    account-mapping check, so it should never surface an 'unmapped account'
-    warning even though the account is disabled."""
+    """Traditional IRA (000000003) is a mapped-but-disabled account. Disabling an
+    account is a deliberate choice, not a config gap, so it must never surface an
+    'unmapped account' warning -- only genuinely unknown accounts do."""
 
     raw_rows = io_layer.read_input_csv(csv_path)
     _, _, _, warnings = preprocess_rows(raw_rows, settings)
@@ -58,9 +57,9 @@ def test_traditional_ira_never_warns(csv_path: Path, settings):
 
 @pytest.mark.parametrize("csv_path", ALL_FILES, ids=lambda p: p.name)
 def test_no_warnings_at_all_for_clean_files(csv_path: Path, settings):
-    """Disclaimers, blank lines, and money-market rows should vanish silently --
-    zero warnings for any of the sample files (every account present is either
-    mapped+enabled or filtered out before account resolution)."""
+    """Disclaimers and blank lines should vanish silently, and money-market rows
+    should fold into Cash without complaint -- zero warnings for any of the sample
+    files (every account present is either mapped+enabled or mapped+disabled)."""
 
     raw_rows = io_layer.read_input_csv(csv_path)
     _, _, _, warnings = preprocess_rows(raw_rows, settings)
@@ -69,6 +68,7 @@ def test_no_warnings_at_all_for_clean_files(csv_path: Path, settings):
 
 @pytest.mark.parametrize("csv_path", ALL_FILES, ids=lambda p: p.name)
 def test_no_omitted_symbols_leak_through(csv_path: Path, settings):
+    """Money-market symbols are rewritten to Cash, never written through as-is."""
     raw_rows = io_layer.read_input_csv(csv_path)
     holdings, _, _, _ = preprocess_rows(raw_rows, settings)
     tickers = {h.ticker for h in holdings}
@@ -97,9 +97,8 @@ def test_aug_2026_brkb_aliased_to_brk_dot_b(settings):
 def test_aug_2026_observed_labels_excludes_disabled_traditional_ira(settings):
     raw_rows = io_layer.read_input_csv(AUG_CSV)
     _, _, observed_labels, _ = preprocess_rows(raw_rows, settings)
-    # Traditional IRA maps to "Fidelity Brokerage" but disabled; its only holding
-    # (SPAXX) is filtered before account resolution, so it can't even indirectly
-    # contribute to observed_labels via that path.
+    # Traditional IRA maps to "Fidelity Brokerage" but is disabled, so its SPAXX
+    # row resolves to no label at all and can't contribute to observed_labels.
     assert observed_labels <= settings.owned_labels()
 
 
@@ -323,3 +322,99 @@ enabled = true
     assert h.shares == 15.0
     assert h.avg_cost == pytest.approx(2000.0 / 15.0)
     assert any("Aggregated" in w for w in warnings)
+
+
+# --- cash / money-market handling ------------------------------------------
+
+CASH_TOML = """
+[sheet]
+spreadsheet_id = "S"
+
+[[accounts]]
+number = "111"
+name = "Individual"
+label = "Fidelity Brokerage"
+enabled = true
+"""
+
+
+def _cash_settings(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text(CASH_TOML, encoding="utf-8")
+    return load_settings(path)
+
+
+def _cash_row(symbol: str, value: str) -> dict:
+    """A money-market row as Fidelity actually exports it: no quantity, no cost
+    basis, just a dollar Current value."""
+    return {
+        "Account Number": "111",
+        "Account Name": "Individual",
+        "Symbol": symbol,
+        "Description": "HELD IN MONEY MARKET",
+        "Quantity": "",
+        "Last price": "",
+        "Current value": value,
+        "Average Cost Basis": "",
+        "Cost Basis Total": "",
+    }
+
+
+def test_cash_row_becomes_dollars_at_one_dollar_a_share(tmp_path):
+    local_settings = _cash_settings(tmp_path)
+    holdings, skipped, _, warnings = preprocess_rows(
+        [_cash_row("SPAXX**", "$16274.62")], local_settings
+    )
+
+    assert warnings == []
+    assert skipped == set()
+    assert len(holdings) == 1
+    assert holdings[0].ticker == "Cash"
+    assert holdings[0].shares == 16274.62
+    assert holdings[0].avg_cost == 1.0
+
+
+def test_multiple_money_markets_in_one_account_collapse_to_one_cash_row(tmp_path):
+    """An account can hold a core position plus a second money-market fund. Both
+    must land in a single Cash row whose shares are the combined dollars, still at
+    $1.00 avg cost -- otherwise the sheet would show two competing cash lines."""
+
+    local_settings = _cash_settings(tmp_path)
+    holdings, _, _, _ = preprocess_rows(
+        [_cash_row("SPAXX**", "$100.00"), _cash_row("FDRXX**", "$25.50")],
+        local_settings,
+    )
+
+    assert len(holdings) == 1
+    assert holdings[0].ticker == "Cash"
+    assert holdings[0].shares == pytest.approx(125.50)
+    assert holdings[0].avg_cost == pytest.approx(1.0)
+
+
+def test_cash_row_without_current_value_is_protected_and_warns(tmp_path):
+    """A cash row we can't price must not silently disappear -- that would look
+    identical to "the cash is gone" and delete the sheet's Cash row."""
+
+    local_settings = _cash_settings(tmp_path)
+    holdings, skipped, observed, warnings = preprocess_rows(
+        [_cash_row("SPAXX**", "")], local_settings
+    )
+
+    assert holdings == []
+    assert ("Cash", "Fidelity Brokerage") in skipped
+    assert observed == {"Fidelity Brokerage"}
+    assert any("SPAXX**" in w for w in warnings)
+
+
+def test_cash_prefixes_can_be_disabled(tmp_path):
+    """With cash_prefixes empty, money-market rows fall through to the normal
+    path and are skipped as unparsable (blank quantity) -- the pre-cash behavior
+    for anyone who does not want cash tracked."""
+
+    path = tmp_path / "settings.toml"
+    path.write_text(CASH_TOML + '\n[symbols]\ncash_prefixes = []\n', encoding="utf-8")
+    local_settings = load_settings(path)
+
+    holdings, skipped, _, _ = preprocess_rows([_cash_row("SPAXX**", "$100.00")], local_settings)
+    assert holdings == []
+    assert ("SPAXX**", "Fidelity Brokerage") in skipped

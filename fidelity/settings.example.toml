@@ -20,15 +20,20 @@ tab = "Portfolio"
 table = "INVESTMENT_HOLDINGS"
 
 [symbols]
-# Tickers the tool ignores completely. Money-market/cash rows have a dollar
-# value but no share count, so they can't be a row in a holdings table.
-ignore_prefixes = [
-    "SPAXX",
-    "FDRXX",
-]
+# Tickers the tool ignores completely.
+ignore_prefixes = []
 ignore_exact = [
     "PENDING ACTIVITY",
 ]
+# Money-market / core-position symbols (Fidelity suffixes them with "**", so
+# these are matched as prefixes). Their rows carry only a dollar Current value,
+# so each is recorded as `cash_ticker` with shares = dollars, avg cost = $1.00.
+# All of them collapse into one cash row per account.
+cash_prefixes = [
+    "SPAXX",
+    "FDRXX",
+]
+cash_ticker = "Cash"
 
 [symbols.aliases]
 # Fidelity's CSV symbol -> the ticker your sheet uses.

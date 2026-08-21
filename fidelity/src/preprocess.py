@@ -35,6 +35,7 @@ _HEADER_ALIASES: Dict[str, Tuple[str, ...]] = {
     "quantity": ("quantity", "qty"),
     "average cost basis": ("average cost basis", "avg cost basis", "avg. cost basis"),
     "cost basis total": ("cost basis total", "total cost basis"),
+    "current value": ("current value", "current val", "value"),
 }
 
 _REQUIRED_CANONICAL = {
@@ -97,9 +98,11 @@ def preprocess_rows(
       partial export never mass-deletes accounts it didn't mention.
     - warnings: human-readable, aggregated (not per-row) where the plan requires it.
 
-    Filter order matters and is preserved from the legacy implementation:
-    empty symbol -> skip silent; ignore_prefixes/ignore_exact -> skip silent;
-    THEN account resolution; THEN numbers.
+    Filter order: empty symbol -> skip silent; ignore_prefixes/ignore_exact ->
+    skip silent; THEN account resolution; THEN numbers. Money-market symbols
+    (`cash_prefixes`) take a separate numeric path -- they carry only a dollar
+    Current value, recorded as shares = dollars at avg_cost = $1.00 under a
+    single `cash_ticker` per account.
     """
 
     if not raw_rows:
@@ -121,6 +124,11 @@ def preprocess_rows(
 
     ignore_exact = {s.strip().upper() for s in settings.symbols.ignore_exact}
     ignore_prefixes = tuple(p.strip().upper() for p in settings.symbols.ignore_prefixes)
+    cash_prefixes = tuple(
+        p.strip().upper() for p in settings.symbols.cash_prefixes if p.strip()
+    )
+    # Case is preserved verbatim: "Cash" is a label, not a ticker.
+    cash_ticker = settings.symbols.cash_ticker.strip()
     aliases = {k.strip().upper(): v for k, v in settings.symbols.aliases.items()}
 
     # key -> list of (quantity, cost_total_or_None, avg_cost_or_None, description_or_None)
@@ -139,12 +147,22 @@ def preprocess_rows(
         if symbol in ignore_exact or any(symbol.startswith(p) for p in ignore_prefixes):
             continue
 
+        # Money-market rows are matched by prefix ("SPAXX**", "FDRXX**") and are
+        # handled entirely differently below: they have no Quantity and no cost
+        # basis, only a dollar Current value.
+        is_cash = bool(cash_prefixes) and symbol.startswith(cash_prefixes)
+
         account_number = _get(raw, header_map, "account number")
         account_name = _get(raw, header_map, "account name")
         label = settings.resolve_label(account_number, account_name)
 
         if label is None:
-            if account_number or account_name:
+            # A mapped-but-disabled account is a deliberate choice, not a config
+            # gap, so it stays silent. Only genuinely unknown accounts warn.
+            known = (settings.find_by_number(account_number) if account_number else None) or (
+                settings.find_by_name(account_name) if account_name else None
+            )
+            if (account_number or account_name) and known is None:
                 unmapped_key = (account_number, account_name)
                 unmapped_counts[unmapped_key] = unmapped_counts.get(unmapped_key, 0) + 1
             continue
@@ -156,6 +174,26 @@ def preprocess_rows(
         # alias entry so this is a no-op for them.
         symbol = aliases.get(symbol, symbol)
         key: HoldingKey = (symbol, label)
+
+        if is_cash:
+            # Record $N of cash as N "shares" at $1.00, so the sheet's
+            # shares * avg_cost equity math yields the dollar balance unchanged.
+            # All cash symbols collapse to one `cash_ticker` row per account.
+            key = (cash_ticker, label)
+            value_raw = _get(raw, header_map, "current value")
+            try:
+                value = _parse_float(value_raw)
+            except ValueError:
+                value = None
+            if value is None:
+                skipped_keys.add(key)
+                warnings.append(
+                    f"Skipping cash row {symbol}/{label}: unusable current value "
+                    f"'{value_raw}'"
+                )
+                continue
+            groups.setdefault(key, []).append((value, value, 1.0, "Cash"))
+            continue
 
         quantity_raw = _get(raw, header_map, "quantity")
         try:

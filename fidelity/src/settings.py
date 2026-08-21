@@ -74,9 +74,17 @@ class SheetSettings:
 
 @dataclass
 class SymbolSettings:
-    ignore_prefixes: List[str] = field(default_factory=lambda: ["SPAXX", "FDRXX"])
+    ignore_prefixes: List[str] = field(default_factory=list)
     ignore_exact: List[str] = field(default_factory=lambda: ["PENDING ACTIVITY"])
     aliases: Dict[str, str] = field(default_factory=lambda: {"BRKB": "BRK.B"})
+    # Money-market/core-position symbols. These rows carry no Quantity or
+    # Average Cost Basis in the export -- only a dollar Current value -- so they
+    # are recorded as `cash_ticker` with shares = dollars and avg_cost = 1.00.
+    # Matched by prefix, because Fidelity suffixes them with "**".
+    cash_prefixes: List[str] = field(default_factory=lambda: ["SPAXX", "FDRXX"])
+    # All cash_prefixes collapse to this one ticker per account, so an account
+    # holding both a core fund and a second money market yields a single row.
+    cash_ticker: str = "Cash"
 
 
 @dataclass
@@ -179,6 +187,8 @@ class Settings:
             "symbols": {
                 "ignore_prefixes": list(self.symbols.ignore_prefixes),
                 "ignore_exact": list(self.symbols.ignore_exact),
+                "cash_prefixes": list(self.symbols.cash_prefixes),
+                "cash_ticker": self.symbols.cash_ticker,
                 "aliases": dict(self.symbols.aliases),
             },
             "tolerance": {
@@ -228,6 +238,11 @@ def _validate(settings: Settings) -> None:
     if not settings.sheet.spreadsheet_id:
         raise SettingsError(f"{settings.path}: [sheet].spreadsheet_id is required")
 
+    if settings.symbols.cash_prefixes and not settings.symbols.cash_ticker:
+        raise SettingsError(
+            f"{settings.path}: [symbols].cash_ticker is required when cash_prefixes is set"
+        )
+
 
 def load_settings(path: Optional[Path] = None) -> Settings:
     """Load and validate settings.toml. Raises SettingsError on any problem."""
@@ -272,8 +287,10 @@ def load_settings(path: Optional[Path] = None) -> Settings:
     if not isinstance(symbols_raw, dict):
         raise SettingsError(f"{settings_path}: [symbols] must be a table")
     symbols = SymbolSettings(
-        ignore_prefixes=list(symbols_raw.get("ignore_prefixes", ["SPAXX", "FDRXX"])),
+        ignore_prefixes=list(symbols_raw.get("ignore_prefixes", [])),
         ignore_exact=list(symbols_raw.get("ignore_exact", ["PENDING ACTIVITY"])),
+        cash_prefixes=list(symbols_raw.get("cash_prefixes", ["SPAXX", "FDRXX"])),
+        cash_ticker=str(symbols_raw.get("cash_ticker", "Cash")).strip(),
         aliases=dict(symbols_raw.get("aliases", {"BRKB": "BRK.B"})),
     )
 

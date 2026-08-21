@@ -111,16 +111,33 @@ write and just prints the alert to stderr.
 denies `~/Downloads` to processes without Full Disk Access — that should
 become an email, not a stack trace.
 
-## Cash is not synced
+## Cash is synced as a synthetic `Cash` holding
 
-Fidelity reports `SPAXX`/`FDRXX`/`Pending activity` with a dollar value but no
-share count and no cost basis, so they can't be a row in a table whose
-`Total_Equity` is shares × price. They're dropped via
-`[symbols].ignore_prefixes` / `ignore_exact`. The prefix filter runs **before**
-account resolution, so a disabled cash-only account never produces an
-"unmapped account" warning. Tracking that cash would mean writing to
-`MANUAL_BALANCES` — a deliberately separate, unstarted change. Users don't
-need to know any of this, which is why it's here and not in the README.
+Fidelity reports money-market rows (`SPAXX**`, `FDRXX**`) with a dollar
+`Current value` but no share count and no cost basis, so they can't be a normal
+row in a table whose `Total_Equity` is shares × price. They're recorded instead
+as **shares = dollars, avg cost = $1.00**, which makes shares × avg cost equal
+the balance exactly and leaves the existing equity math untouched.
+
+Every symbol in `[symbols].cash_prefixes` collapses into a single
+`[symbols].cash_ticker` (default `Cash`) row **per account**, because an account
+can hold a core position plus a separately-purchased money market and two
+competing cash lines would be wrong. Matching is by prefix, since Fidelity
+suffixes these symbols with `**`. Set `cash_prefixes = []` to go back to not
+tracking cash at all.
+
+`Pending activity` stays dropped via `[symbols].ignore_exact` — it is a
+settlement artifact, not a balance.
+
+Because cash rows now reach account resolution (they used to be prefix-filtered
+before it), the "unmapped account" warning skips accounts that are mapped but
+disabled; only genuinely unknown accounts warn.
+
+Migration is free: an existing sheet row for `SPAXX`/`Fidelity Brokerage` has no
+matching holding after this change, so the diff engine deletes it, and the new
+`Cash` row is added — same account label, same scope, no special-case code.
+`D`/`E`/`F` still belong to the sheet's own formulas; a `Cash` row has no
+market price, so those columns are the user's to handle.
 
 ## Config
 
@@ -139,3 +156,7 @@ a fresh clone passes.
 Real account numbers, the spreadsheet id, and the employer 401(k) name were
 purged from history with `git filter-repo` and force-pushed. Don't reintroduce
 them into tracked files.
+
+`Cash` is deliberately mixed-case, and `read_table_block` reads the Ticker column
+verbatim rather than upper-casing it -- force-casing would make every sync see
+`CASH` in the sheet, miss the `Cash` holding, and churn delete+add forever.
