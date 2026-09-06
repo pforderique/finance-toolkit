@@ -69,6 +69,12 @@ RATINGS_MAX_AGE_DAYS = 21
 #: How many business days without a completed ms_screener run before we shout.
 MAX_BUSINESS_DAYS_WITHOUT_RUN = 2
 
+#: A run whose log block has no summary yet is only "dead" if nothing has
+#: touched the log for this long. ms_screener writes progress lines constantly,
+#: so a quiet log means the process is gone, not slow. The brief fires at 07:45
+#: and the screener starts at 07:05, so an in-progress run is the common case.
+RUN_QUIET_MINUTES = 15
+
 DEFAULT_LOG_PATH = Path.home() / "Library" / "Logs" / "ms_screener.log"
 DEFAULT_LOGS_DIR = Path(__file__).parent.parent / "logs"
 
@@ -264,8 +270,10 @@ def parse_run_log(text: str) -> list[dict]:
         elif any(mark in body for mark in _SUCCESS_MARKERS):
             status = "ok"
         else:
-            # No error printed and no summary table => the process died mid-run
-            # (killed, machine slept, uncaught crash on stderr only).
+            # No error printed and no summary table => either the process is
+            # still working (the summary is only printed at the very end) or it
+            # died mid-run. check_last_run() disambiguates for the newest run by
+            # looking at how recently the log was written.
             status = "incomplete"
 
         runs.append({
@@ -275,6 +283,20 @@ def parse_run_log(text: str) -> list[dict]:
             "error": error_line,
         })
     return runs
+
+
+def run_still_active(log_path: Path, now: Optional[datetime] = None) -> bool:
+    """True if the ms_screener log was written to within RUN_QUIET_MINUTES.
+
+    Phase 1 of the scrape emits a line per ticker, so an ongoing run keeps the
+    log warm. A cold log with no summary is a run that really did die.
+    """
+    now = now or datetime.now()
+    try:
+        touched = datetime.fromtimestamp(log_path.stat().st_mtime)
+    except OSError:
+        return False
+    return (now - touched) < timedelta(minutes=RUN_QUIET_MINUTES)
 
 
 def check_last_run(log_path: Path = DEFAULT_LOG_PATH, as_of: Optional[date] = None) -> dict:
@@ -308,22 +330,40 @@ def check_last_run(log_path: Path = DEFAULT_LOG_PATH, as_of: Optional[date] = No
         return result
 
     last = runs[-1]
+    # A run started today with no summary yet is almost certainly still going —
+    # the brief runs 40 minutes after the screener starts. Only call it failed
+    # once the log has gone quiet.
+    if (
+        last["status"] == "incomplete"
+        and date.fromisoformat(last["date"]) == as_of
+        and run_still_active(log_path)
+    ):
+        last = dict(last, status="running")
+
     last_date = date.fromisoformat(last["date"])
     result["last_run"] = last["started"]
     result["last_run_status"] = last["status"]
     result["last_run_error"] = last["error"]
     result["age_days"] = (as_of - last_date).days
 
-    # How many runs back does the failure streak go?
+    # How many runs back does the failure streak go? A still-running run is not
+    # a failure, so start the count below it.
+    streak_runs = runs[:-1] if last["status"] == "running" else runs
     failures = 0
-    for run in reversed(runs):
+    for run in reversed(streak_runs):
         if run["status"] == "ok":
             break
         failures += 1
     result["consecutive_failures"] = failures
 
     missed = business_days_between(last_date, as_of)
-    if last["status"] != "ok":
+    if last["status"] == "running":
+        result["severity"] = "warn"
+        result["detail"] = (
+            f"ms_screener started {last['started']} and is still running — "
+            f"ratings dates may finish updating after this brief was built."
+        )
+    elif last["status"] != "ok":
         result["severity"] = "critical"
         reason = last["error"] or f"run ended {last['status']} (no summary written)"
         streak = (

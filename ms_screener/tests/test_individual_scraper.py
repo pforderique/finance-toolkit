@@ -1,12 +1,17 @@
 """Tests for individual_scraper module."""
 
 import pytest
+
+from selenium.common.exceptions import TimeoutException
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ms_screener.src.individual_scraper import (
     IndividualScrapeResult,
+    _POPOVER_CLICK_TRIES,
+    _open_popover_and_click_equity,
+    scrape_individual_pages,
     _assign_tier,
     _is_stale,
     _filter_stale_stocks,
@@ -289,3 +294,112 @@ class TestPdfDateParsing:
         )
         assert dates["analyst note"] == "2026-08-03"
         assert dates["economic moat"] == "2026-07-21"
+
+
+class TestPhase1Budget:
+    """Phase 1 must not run past its wall-clock budget.
+
+    On slow Morningstar days every ticker burns all three retries and the run
+    stretches past two hours, which pushes it well past the 07:45 brief.
+    """
+
+    @staticmethod
+    def _stocks(n):
+        return [
+            {"ticker": f"T{i}", "perf_id": f"0P{i:08d}", "ratings_date": "",
+             "moat": "None", "uncertainty": "High"}
+            for i in range(n)
+        ]
+
+    def _run(self, budget, clock):
+        with patch("ms_screener.src.individual_scraper.time.sleep"), \
+             patch("ms_screener.src.individual_scraper.time.monotonic", side_effect=clock), \
+             patch("ms_screener.src.individual_scraper.BeautifulSoup", return_value=MagicMock()), \
+             patch("ms_screener.src.individual_scraper.WebDriverWait"), \
+             patch("ms_screener.src.individual_scraper._extract_uncertainty", return_value=None), \
+             patch("ms_screener.src.individual_scraper._extract_capital_allocation", return_value=None):
+            return scrape_individual_pages(
+                MagicMock(), self._stocks(5), max_stocks=10,
+                rate_limit_seconds=0, download_dir=None, budget_seconds=budget,
+            )
+
+    def test_tickers_past_the_budget_are_pending_not_failed(self):
+        # The clock is read once to set the deadline, then again per ticker.
+        # Blowing the budget on the third read stops the loop with work left.
+        readings = []
+
+        def clock():
+            readings.append(len(readings))
+            return 0 if len(readings) <= 2 else 9999
+
+        result = self._run(60, clock)
+        # Deferred, not failed: a ticker we never got to is retried next run.
+        assert result.pending == ["T1", "T2", "T3", "T4"]
+        assert not set(result.failed) & set(result.pending)
+
+    def test_budget_none_disables_the_cap(self):
+        result = self._run(None, lambda: 0)
+        assert result.pending == []
+
+
+class TestPopoverDoubleClick:
+    """The Morningstar popover swallows its first click.
+
+    Measured live: click 1 leaves the menu closed, click 2 opens it. The old
+    single-click code failed on every ticker and only succeeded because the next
+    outer retry happened to land the second click.
+    """
+
+    def _driver_needing_n_clicks(self, n):
+        """A driver whose equity button only appears after `n` popover clicks."""
+        driver = MagicMock()
+        state = {"clicks": 0}
+        driver.find_elements.side_effect = lambda *a, **k: (
+            [MagicMock()] if state["clicks"] >= n else []
+        )
+
+        def wait_until(cond):
+            # WebDriverWait(...).until(...) — resolve against the click count.
+            if state["clicks"] >= n:
+                return MagicMock()
+            raise TimeoutException()
+
+        return driver, state, wait_until
+
+    def test_second_click_opens_the_popover(self):
+        clicks = []
+        popover, equity = MagicMock(), MagicMock()
+        popover.click.side_effect = lambda: clicks.append("pop")
+
+        def fake_wait(driver, timeout):
+            waiter = MagicMock()
+            waiter.until.side_effect = lambda cond: (
+                equity if len(clicks) >= 2 else _raise(TimeoutException())
+            )
+            return waiter
+
+        with patch("ms_screener.src.individual_scraper.WebDriverWait", fake_wait), \
+             patch("ms_screener.src.individual_scraper.time.sleep"):
+            _open_popover_and_click_equity(MagicMock(), popover, lambda el: el.click())
+
+        assert popover.click.call_count == 2
+        assert equity.click.call_count == 1
+
+    def test_gives_up_after_the_click_budget(self):
+        popover = MagicMock()
+
+        def fake_wait(driver, timeout):
+            waiter = MagicMock()
+            waiter.until.side_effect = lambda cond: _raise(TimeoutException())
+            return waiter
+
+        with patch("ms_screener.src.individual_scraper.WebDriverWait", fake_wait), \
+             patch("ms_screener.src.individual_scraper.time.sleep"), \
+             pytest.raises(TimeoutException):
+            _open_popover_and_click_equity(MagicMock(), popover, lambda el: el.click())
+
+        assert popover.click.call_count == _POPOVER_CLICK_TRIES
+
+
+def _raise(exc):
+    raise exc

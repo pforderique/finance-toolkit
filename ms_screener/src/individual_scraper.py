@@ -10,6 +10,7 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 import pdfplumber
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver import Chrome
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
@@ -20,6 +21,12 @@ from ms_screener.src.logging_setup import console
 BASE_URL = "https://research-morningstar-com.ezproxy.spl.org/quotes/{perf_id}"
 TIER_THRESHOLDS = {1: 14, 2: 30, 3: 60}
 PAGE_WAIT_SECONDS = 30
+
+#: Wall-clock budget for Phase 1. When Morningstar goes slow, every ticker burns
+#: all three retries and the run stretches past two hours — long enough that the
+#: 07:45 morning brief reads a half-finished sheet. Tickers left over are
+#: reported as pending and picked up by the next run instead.
+PHASE1_BUDGET_SECONDS = 30 * 60
 
 
 @dataclass
@@ -39,6 +46,7 @@ def scrape_individual_pages(
     download_dir: Optional[Path] = None,
     tickers: Optional[list[str]] = None,
     force_tickers: Optional[set[str]] = None,
+    budget_seconds: Optional[float] = PHASE1_BUDGET_SECONDS,
 ) -> IndividualScrapeResult:
     """
     Two-phase scrape: first download+persist all PDFs, then extract from all persisted PDFs.
@@ -50,6 +58,8 @@ def scrape_individual_pages(
         rate_limit_seconds: Seconds to wait between page requests
         download_dir: Temp directory for PDF downloads before persisting to artifacts/
         tickers: If provided, scrape only these tickers (bypasses staleness filter)
+        budget_seconds: Wall-clock cap on Phase 1; leftovers become pending.
+            None disables the cap.
     """
     log_dir = Path(__file__).parent.parent / "logs"
     log_dir.mkdir(exist_ok=True)
@@ -87,8 +97,24 @@ def scrape_individual_pages(
     # ── Phase 1: Navigate each page, grab HTML data, download + persist PDF ──────
     console.rule("[bold]Phase 1: Downloading PDFs[/bold]")
     html_data: dict[str, dict] = {}
+    deadline = time.monotonic() + budget_seconds if budget_seconds else None
+    attempted: list[dict] = []
 
-    for stock in qualifying:
+    for i, stock in enumerate(qualifying):
+        if deadline and time.monotonic() > deadline:
+            out_of_time = [s["ticker"] for s in qualifying[i:]]
+            pending.extend(out_of_time)
+            console.print(
+                f"[yellow]• Phase 1 hit its {budget_seconds / 60:.0f}-minute budget;"
+                f" {len(out_of_time)} ticker(s) deferred to next run[/yellow]"
+            )
+            logger.warning(
+                f"Phase 1 budget exhausted after {len(attempted)} ticker(s); "
+                f"deferred: {','.join(out_of_time)}"
+            )
+            break
+        attempted.append(stock)
+
         time.sleep(rate_limit_seconds)
         ticker = stock["ticker"]
         perf_id = stock["perf_id"]
@@ -117,6 +143,10 @@ def scrape_individual_pages(
                 console.print(f"[green]• PDF saved:  {ticker}[/green]")
             else:
                 console.print(f"[yellow]• No PDF for {ticker} after retries[/yellow]")
+
+    # Only tickers Phase 1 actually reached can be extracted; the rest are
+    # pending, not failed, so they must not be reported as broken downloads.
+    qualifying = attempted
 
     # ── Phase 2: Extract from persisted PDFs ─────────────────────────────────────
     console.rule("[bold]Phase 2: Extracting from PDFs[/bold]")
@@ -379,43 +409,60 @@ def _download_pdf_with_retry(
     return None
 
 
+#: The popover swallows its first click. Measured against a live page: click 1
+#: leaves the menu closed, click 2 opens it, click 3 closes it again. The
+#: original single-click code therefore failed on every ticker of every run and
+#: only worked because the *next* retry landed the second click — a 30s+ tax per
+#: ticker that turned slow Morningstar days into two-hour runs.
+_POPOVER_CLICK_TRIES = 3
+_POPOVER_SETTLE_SECONDS = 5
+
+_POPOVER_XPATH = "//button[contains(@aria-label, 'Download Report')]"
+_EQUITY_CSS = 'button[aria-label="Download Equity Report"]'
+
+
+def _open_popover_and_click_equity(driver: Chrome, popover_btn, click) -> None:
+    """Click the popover until the equity-report entry shows, then click it.
+
+    `click` performs one click on an element (a plain Selenium click or a JS
+    click), so both strategies share the retry loop.
+    """
+    for press in range(_POPOVER_CLICK_TRIES):
+        click(popover_btn)
+        try:
+            equity_btn = WebDriverWait(driver, _POPOVER_SETTLE_SECONDS).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, _EQUITY_CSS))
+            )
+        except TimeoutException:
+            continue
+        click(equity_btn)
+        time.sleep(1)
+        return
+
+    raise TimeoutException(
+        f"popover never revealed the equity report after "
+        f"{_POPOVER_CLICK_TRIES} clicks"
+    )
+
+
 def _click_download_report_button(driver: Chrome) -> None:
     """Click 'Download Report(s)' to open popover, then click 'Download Equity Report'."""
     popover_btn = WebDriverWait(driver, PAGE_WAIT_SECONDS).until(
-        EC.element_to_be_clickable(
-            (By.XPATH, "//button[contains(@aria-label, 'Download Report')]")
-        )
+        EC.element_to_be_clickable((By.XPATH, _POPOVER_XPATH))
     )
-    popover_btn.click()
-    time.sleep(2)
-
-    equity_btn = WebDriverWait(driver, 10).until(
-        EC.element_to_be_clickable(
-            (By.CSS_SELECTOR, 'button[aria-label="Download Equity Report"]')
-        )
-    )
-    equity_btn.click()
-    time.sleep(1)
+    _open_popover_and_click_equity(driver, popover_btn, lambda el: el.click())
 
 
 def _click_download_report_button_js(driver: Chrome) -> None:
     """JS-click fallback: scroll into view then fire click via JS (bypasses intercept)."""
     popover_btn = WebDriverWait(driver, PAGE_WAIT_SECONDS).until(
-        EC.presence_of_element_located(
-            (By.XPATH, "//button[contains(@aria-label, 'Download Report')]")
-        )
+        EC.presence_of_element_located((By.XPATH, _POPOVER_XPATH))
     )
     driver.execute_script("arguments[0].scrollIntoView(true);", popover_btn)
-    driver.execute_script("arguments[0].click();", popover_btn)
-    time.sleep(2)
-
-    equity_btn = WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located(
-            (By.CSS_SELECTOR, 'button[aria-label="Download Equity Report"]')
-        )
+    _open_popover_and_click_equity(
+        driver, popover_btn,
+        lambda el: driver.execute_script("arguments[0].click();", el),
     )
-    driver.execute_script("arguments[0].click();", equity_btn)
-    time.sleep(1)
 
 
 def _wait_for_pdf_download(download_dir: Path, before: set[str], timeout: int = 60) -> Optional[Path]:

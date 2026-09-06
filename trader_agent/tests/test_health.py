@@ -1,7 +1,8 @@
 """Tests for the pipeline staleness alarm (trader_agent.tools.health)."""
 
 import json
-from datetime import date, timedelta
+import os
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -493,3 +494,54 @@ def test_brief_has_no_banner_when_healthy():
     html = build_html({"date": "2026-08-06", "week_changes": {"changes": []}},
                       health={"alarm": False})
     assert "STALENESS ALARM" not in html
+
+
+# ---------------------------------------------------------------------------
+# in-progress runs — the screener starts at 07:05, the brief builds at 07:45
+# ---------------------------------------------------------------------------
+
+def test_run_still_going_is_warn_not_a_failed_run(tmp_path):
+    """The summary table only prints at the very end. A run started today whose
+    log is still being written is in progress, not dead."""
+    p = tmp_path / "ms.log"
+    p.write_text(_log((f"{MONDAY} 07:05:02", "• PDF saved: AAPL\n")), encoding="utf-8")
+    r = check_last_run(p, MONDAY)
+    assert r["last_run_status"] == "running"
+    assert r["severity"] == "warn"
+    assert "still running" in r["detail"]
+    assert r["consecutive_failures"] == 0
+
+
+def test_run_with_a_cold_log_and_no_summary_is_still_a_failure(tmp_path):
+    """Quiet log + no summary => the process really did die."""
+    p = tmp_path / "ms.log"
+    p.write_text(_log((f"{MONDAY} 07:05:02", "• PDF saved: AAPL\n")), encoding="utf-8")
+    stale = (datetime.now() - timedelta(minutes=health.RUN_QUIET_MINUTES + 5)).timestamp()
+    os.utime(p, (stale, stale))
+    r = check_last_run(p, MONDAY)
+    assert r["last_run_status"] == "incomplete"
+    assert r["severity"] == "critical"
+
+
+def test_in_progress_run_does_not_hide_an_earlier_failure_streak(tmp_path):
+    p = tmp_path / "ms.log"
+    p.write_text(
+        _log(
+            ("2026-08-06 07:05:02", _ERR_BODY),
+            ("2026-08-07 07:05:04", _ERR_BODY),
+            (f"{MONDAY} 07:05:02", "• PDF saved: AAPL\n"),
+        ),
+        encoding="utf-8",
+    )
+    r = check_last_run(p, MONDAY)
+    assert r["last_run_status"] == "running"
+    assert r["consecutive_failures"] == 2
+
+
+def test_yesterdays_incomplete_run_is_not_excused_by_a_warm_log(tmp_path):
+    """Only today's run can be 'still running' — an old one is finished, badly."""
+    p = tmp_path / "ms.log"
+    p.write_text(_log(("2026-08-07 07:05:02", "• PDF saved: AAPL\n")), encoding="utf-8")
+    r = check_last_run(p, MONDAY)
+    assert r["last_run_status"] == "incomplete"
+    assert r["severity"] == "critical"
