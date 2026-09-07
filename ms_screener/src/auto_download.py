@@ -1,6 +1,7 @@
 """Automation helpers for fetching Morningstar CSV exports via Selenium."""
 
 import os
+import re
 import tempfile
 import time
 from contextlib import contextmanager
@@ -36,6 +37,17 @@ GRID_ROW_SELECTOR = ".compare__table-row"
 GRID_WAIT_SECONDS = 45
 DOWNLOAD_CLICK_ATTEMPTS = 3
 DOWNLOAD_ATTEMPT_WAIT_SECONDS = 30
+
+# EZProxy answers a bad barcode/PIN immediately with an error rendered on the
+# login page itself (the URL never leaves /login), so waiting the full
+# PAGE_WAIT_SECONDS turns an instant, explicit rejection into a vague timeout.
+# Match on the wording EZProxy/SPL actually renders rather than a DOM id we
+# cannot verify across template changes.
+LOGIN_ERROR_MARKERS = (
+    "not recognized",
+    "is suspended",
+    "please try again",
+)
 
 USERNAME_KEYWORDS = ("user",)  # ("barcode", "user", "username", "card")
 PIN_KEYWORDS = ("pass",)  # ("pin", "password", "passcode", "pass")
@@ -233,12 +245,45 @@ def perform_login(driver: Chrome, username: str, pin: str) -> None:
             return True
         return "login" not in current
 
+    def _outcome(driver_ref: Chrome) -> Optional[Tuple[str, str]]:
+        # Race the success signal against the page's own rejection message so a
+        # bad card fails in under a second instead of after PAGE_WAIT_SECONDS.
+        if _logged_in(driver_ref):
+            return ("ok", "")
+        message = _login_error_text(driver_ref)
+        if message:
+            return ("rejected", message)
+        return None
+
     try:
-        WebDriverWait(driver, PAGE_WAIT_SECONDS).until(_logged_in)
+        status, message = WebDriverWait(driver, PAGE_WAIT_SECONDS).until(_outcome)
     except TimeoutException as exc:
         raise AutoDownloadError(
             "Timed out waiting for EZProxy login to complete. Double-check credentials."
         ) from exc
+
+    if status == "rejected":
+        raise AutoDownloadError(
+            "SPL EZProxy rejected the login (check SPL_BARCODE/SPL_PIN, or the card "
+            f"may be expired/suspended — renew at spl.org): {message}"
+        )
+
+
+def _login_error_text(driver: Chrome) -> Optional[str]:
+    """Return the login page's rejection sentence, or None if it shows no error."""
+    try:
+        body = driver.find_element(By.TAG_NAME, "body")
+        text = body.text or ""
+    except Exception:  # pragma: no cover - page mid-navigation has no body yet
+        return None
+
+    # Report only the offending sentence: the full body carries menus and
+    # boilerplate that would bury the actual reason in the log.
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text.strip()):
+        lowered = sentence.lower()
+        if any(marker in lowered for marker in LOGIN_ERROR_MARKERS):
+            return " ".join(sentence.split())
+    return None
 
 
 def _find_input(driver: Chrome, keywords: Tuple[str, ...]) -> Optional[WebElement]:
